@@ -30,11 +30,31 @@ class FakeDatalog:
             1: (TIMESTAMP_2, CID_2),
             2: (TIMESTAMP_3, CID_3),
         }
+        self._service_functions = FakeServiceFunctions(self.items)
 
     def get_index(self, sender_address: str) -> dict[str, int]:
         return {"start": self.start, "end": self.end}
 
+
+class FakeServiceFunctions:
+    def __init__(self, items: dict[int, tuple[int, str | None]]) -> None:
+        self.items = items
+
+    def chainstate_query(
+        self,
+        module: str,
+        storage_function: str,
+        params: list[str | int],
+    ) -> tuple[int, str | None] | None:
+        assert module == "Datalog"
+        assert storage_function == "DatalogItem"
+        return self.items.get(int(params[1]))
+
+
+class FakeDatalogWithBuggyPublicGetItem(FakeDatalog):
     def get_item(self, addr: str, index: int) -> tuple[int, str | None] | None:
+        if index == 0:
+            return self.items[2]
         return self.items.get(index)
 
 
@@ -57,6 +77,14 @@ def test_get_index_range(datalog_reader: DatalogReader) -> None:
 
 def test_get_item(datalog_reader: DatalogReader) -> None:
     record = datalog_reader.get_item(ADDRESS_1, 0)
+
+    assert record == DatalogRecord(ADDRESS_1, 0, TIMESTAMP_1, CID_1)
+
+
+def test_get_item_reads_zero_index_directly() -> None:
+    reader = make_datalog_reader(FakeDatalogWithBuggyPublicGetItem())
+
+    record = reader.get_item(ADDRESS_1, 0)
 
     assert record == DatalogRecord(ADDRESS_1, 0, TIMESTAMP_1, CID_1)
 

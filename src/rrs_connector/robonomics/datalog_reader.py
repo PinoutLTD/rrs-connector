@@ -49,7 +49,13 @@ class DatalogReader:
         return DatalogIndexRange(start, end)
 
     def get_item(self, sender_address: str, datalog_index: int) -> DatalogRecord | None:
-        record = self.datalog.get_item(addr=sender_address, index=datalog_index)
+        # robonomicsinterface.get_item(index=0) treats 0 as "latest";
+        # query storage directly so explicit datalog indices stay exact.
+        record = self.datalog._service_functions.chainstate_query(
+            "Datalog",
+            "DatalogItem",
+            [sender_address, datalog_index],
+        )
 
         if record is None:
             return None
