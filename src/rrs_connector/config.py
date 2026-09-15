@@ -15,16 +15,30 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ENV_FILE = PROJECT_ROOT / ".env"
 
 
+def validate_ss58_address(address: str) -> str:
+    if not is_valid_ss58_address(address):
+        raise ValueError(f"{address} is not a valid SS58 address")
+    return address
+
+
 class EnvSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=DEFAULT_ENV_FILE, env_file_encoding="utf-8", env_prefix="RRS_"
     )
 
+    # Public address only; its seed is read from Proton Pass when decrypting.
+    integrator_address: str
+    pass_vault: str = "Report Service"
     data_dir: Path
     state_db: Path
     poll_interval_seconds: PositiveInt
     network_config_file: Path
     senders_config_file: Path
+
+    @field_validator("integrator_address", mode="after")
+    @classmethod
+    def is_integrator_address(cls, address: str) -> str:
+        return validate_ss58_address(address)
 
 
 class WssConfig(BaseModel):
@@ -60,9 +74,7 @@ class SenderConfig(BaseModel):
     @field_validator("robonomics_address", mode="after")
     @classmethod
     def is_robonomics_address(cls, address: str) -> str:
-        if not is_valid_ss58_address(address):
-            raise ValueError(f"{address} is not a valid SS58 address")
-        return address
+        return validate_ss58_address(address)
 
 
 class SenderRegistryConfig(BaseModel):

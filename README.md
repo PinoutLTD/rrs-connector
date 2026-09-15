@@ -6,11 +6,11 @@ Assistant senders in the Robonomics datalog, store processing state locally, and
 prepare decrypted artifacts for subsequent transfer to a separate
 administrative system.
 
-> **Current status:** Phases 1 (connector foundation) and 2 (reliable datalog
-> collection) are complete. `run-once` reads new datalog records for every
-> enabled sender, classifies them as reports or ignored events, stores them in
-> SQLite, and advances per-sender cursors. Report downloading and decryption
-> (Phase 3) have not been implemented yet.
+> **Current status:** Phases 1–3 are complete. `run-once` collects new datalog
+> records for every enabled sender, downloads each report archive from IPFS,
+> decrypts it with the integrator key read from Proton Pass, and stores the
+> decrypted files and processing state. The contract for the Odoo helpdesk
+> layer (Phase 5) is next.
 
 ## Purpose and scope
 
@@ -57,10 +57,12 @@ The code is divided into layers with explicit responsibility boundaries:
   response into simple Python objects; this layer does not write to the
   database or filesystem;
 - `state/` — SQLAlchemy models, SQLite initialization, and storage operations;
-- `reports/fetcher.py` — future archive downloading, with no knowledge of the
-  encryption format;
-- `reports/decryptor.py` — future secure extraction, envelope decryption, and
-  file name restoration, without access to Robonomics;
+- `reports/fetcher.py` — archive downloading from IPFS gateways, with no
+  knowledge of the encryption format;
+- `reports/decryptor.py` — envelope decryption and file name restoration,
+  without access to Robonomics;
+- `proton_pass.py` — reading the integrator seed from Proton Pass via
+  `pass-cli`;
 - `pipeline.py` — coordination of layers and state transitions;
 - `main.py` — CLI, application startup, high-level error handling, and exit
   codes.
@@ -126,9 +128,55 @@ NEW -> FETCHING -> FETCHED -> DECRYPTING -> PROCESSED
 ```
 
 `FAILED` stores a processing error, while `IGNORED` represents an event that
-was seen but is not supported. Retry policy and cursor advancement on errors
-must be defined in the pipeline. Transitioning to `PROCESSED` sets the
+was seen but is not supported. Transitioning to `PROCESSED` sets the
 processing time; artifact paths are updated incrementally.
+
+After collection, every run processes all `NEW`, `FETCHING`, `FETCHED`, and
+`DECRYPTING` events, so a run interrupted midway resumes where it stopped:
+
+- a failed download (all gateways and retries exhausted) is transient: the
+  event goes back to `NEW` with a `download: …` error and is retried next run;
+- an archive over the size limit, an invalid archive, or any member that cannot
+  be decrypted is permanent: the event becomes `FAILED` with a `download: …` or
+  `decrypt: …` error and is not retried;
+- unexpected errors (for example, disk errors) keep the event `NEW`;
+- if the integrator key cannot be loaded, events stay untouched and the run
+  exits with code `3`; the key is not loaded when nothing is pending.
+
+### Report artifacts
+
+```text
+<RRS_DATA_DIR>/reports/<client_id>/datalog_<index>_<timestamp_ms>/
+  archive.zip          # encrypted archive as downloaded
+  decrypted/
+    issue_description.json
+    home-assistant.log   # JSON Lines log of the HA integration (+ .log.1)
+    trace.saved_traces
+```
+
+- The directory is unique per event, matching its identity.
+- Decrypted files are logs from clients' homes: `reports/` and `decrypted/` are
+  created with mode `0700` and files with `0600`.
+- Encrypted members are read from the zip in memory and never extracted, so
+  archive entry names are never used as paths; output names come from the
+  decrypted metadata and are reduced to their base name. Member count and size
+  are limited.
+- Decryption writes into a staging directory that replaces `decrypted/` only
+  after every member was decrypted; downloads are written to a temporary file
+  and renamed when complete.
+- The format is pinned by `tests/fixtures/ha_report_v1.zip`, produced by
+  rrs-ha-integration's own encryption code.
+
+### Integrator key
+
+- Only the public integrator address is configured (`RRS_INTEGRATOR_ADDRESS`).
+  The seed is read with `pass-cli` from vault `RRS_PASS_VAULT`, item
+  `Robonomics - <address>`, field `seed`, kept in memory only, and must derive
+  exactly the configured address.
+- Locally, an interactive `pass-cli login` session is enough. On a server, use a
+  Proton Pass agent token limited to that item and log in with
+  `PROTON_PASS_PERSONAL_ACCESS_TOKEN`; `PROTON_PASS_AGENT_REASON` is set
+  automatically unless provided.
 
 ## Implemented so far
 
@@ -149,7 +197,11 @@ processing time; artifact paths are updated incrementally.
   cursor advancement after a complete scan, per-sender error isolation, and a
   run summary (new, ignored, already known events, senders with gaps);
 - structured runtime logs and a non-zero exit code on processing errors;
-- unit tests for `StateStore`, `DatalogReader`, and the collection pipeline.
+- report processing: gateway downloads with retries and size limits,
+  multi-envelope decryption compatible with rrs-ha-integration, private
+  artifact layout, resumable statuses, and the integrator seed from Proton Pass;
+- unit tests for `StateStore`, `DatalogReader`, the fetcher, the decryptor,
+  Proton Pass access, and the pipeline.
 
 The schema changed in Phase 2 (event identity and timestamp cursor), and there
 are no migrations yet: recreate any SQLite database created by an earlier
@@ -165,6 +217,8 @@ Environment variables (usually in a local `.env` file):
 
 | Variable | Purpose |
 | --- | --- |
+| `RRS_INTEGRATOR_ADDRESS` | public SS58 address of the integrator (report recipient) |
+| `RRS_PASS_VAULT` | Proton Pass vault with the integrator seed (default `Report Service`) |
 | `RRS_DATA_DIR` | runtime artifact directory |
 | `RRS_STATE_DB` | path to the SQLite database |
 | `RRS_POLL_INTERVAL_SECONDS` | interval for the future periodic mode |
@@ -200,10 +254,11 @@ cp config/network.example.yaml config/network.yaml
 cp config/senders.example.yaml config/senders.yaml
 ```
 
-Then fill in sender SS58 addresses and metadata in `config/senders.yaml`, and
-change the network, endpoint, gateway, timeout, and retry settings in
-`config/network.yaml` if necessary. The configuration contains no secrets:
-collection only reads public chain state.
+Then set the integrator address in `.env`, fill in sender SS58 addresses and
+metadata in `config/senders.yaml`, and change the network, endpoint, gateway,
+timeout, and retry settings in `config/network.yaml` if necessary. The
+configuration contains no secrets: the integrator seed is read from Proton
+Pass (see "Integrator key"), so install `pass-cli` and log in first.
 
 ## Usage
 
@@ -220,10 +275,10 @@ equivalent:
 uv run rrs-connector
 ```
 
-At the current stage, the command validates the configuration, creates or opens
-the SQLite database, synchronizes the sender registry, collects new datalog
-events for every enabled sender, and logs a summary. It exits with code `3` if
-any sender failed. Report downloading and decryption are not performed yet.
+The command validates the configuration, creates or opens the SQLite database,
+synchronizes the sender registry, collects new datalog events for every enabled
+sender, downloads and decrypts pending reports, and logs a summary. It exits
+with code `3` if any sender failed or the integrator key could not be loaded.
 
 ## Tests and static checks
 
@@ -268,30 +323,28 @@ classification with `IGNORED` events keeping the raw payload, idempotent
 storage by `(sender, index, timestamp)`, a timestamp cursor that moves only
 after a complete scan, gap detection, and a run summary, all covered by tests.
 
-### Phase 3 — end-to-end report processing (planned)
+### Phase 3 — end-to-end report processing (complete)
 
-Before implementation, the artifact directory layout (CID or sender/datalog
-index) and gateway policy must be defined. Then:
-
-- implement archive downloading from IPFS;
-- extract archives securely, preventing path traversal and other unsafe paths;
-- decrypt files using the integrator key and restore names from metadata;
-- store archive/raw/decrypted/meta paths and all state transitions;
-- implement retries or recovery after `FAILED` and provide a useful console
-  summary.
+Archives are downloaded through the configured gateways in order (Pinata
+first) with retries, backoff, and a size limit; decrypted in memory without
+extraction into a per-event artifact directory with private permissions; state
+transitions are resumable, with transient download failures retried and
+permanent failures marked `FAILED`. The integrator seed comes from Proton Pass.
+Retention of downloaded archives and decrypted files is not handled yet.
 
 ### Phase 4 — operational CLI and network resilience (planned)
 
 - periodic mode;
 - commands for viewing state and reprocessing;
-- retry/failover for multiple WSS endpoints and IPFS gateways;
-- actual application of configured timeout/retry parameters;
+- retry/failover for multiple WSS endpoints;
+- applying the configured datalog request timeout and retry parameters;
+- retention of report archives and decrypted files;
 - a deployment option for a small Linux host (for example, systemd or a
   container).
 
 Currently, the reader selects only the first WSS endpoint, and the request
-timeout it accepts is not applied. Gateway selection/failover will be added
-along with the fetcher.
+timeout it accepts is not applied. IPFS gateway failover, timeouts, and retries
+are already applied by the fetcher.
 
 ### Phase 5 — stable transfer to admin systems (planned)
 

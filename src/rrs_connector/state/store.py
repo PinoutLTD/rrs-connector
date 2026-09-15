@@ -79,6 +79,12 @@ class StateStore:
             )
             return list(session.scalars(stmt).all())
 
+    def get_sender_record_by_id(self, sender_id: int) -> SenderRecord | None:
+        """Return one sender record by primary key, if it exists."""
+
+        with self._session_factory() as session:
+            return session.get(SenderRecord, sender_id)
+
     def get_sender_record_by_address(self, address: str) -> SenderRecord | None:
         """Return one sender record by Robonomics address, if it exists."""
 
