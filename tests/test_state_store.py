@@ -100,8 +100,9 @@ def get_required_datalog_entry_record(
     store: StateStore,
     sender_id: int,
     datalog_index: int = 1,
+    datalog_timestamp: datetime = DATALOG_TS_1,
 ) -> DatalogEntryRecord:
-    entry = store.get_datalog_entry_record(sender_id, datalog_index)
+    entry = store.get_datalog_entry_record(sender_id, datalog_index, datalog_timestamp)
     assert entry is not None
     return entry
 
@@ -113,7 +114,7 @@ def add_datalog_entry_record(
     raw_payload: str | None = None,
     cid: str | None = CID_1,
     status: DatalogStatus = DatalogStatus.NEW,
-    datalog_timestamp: datetime | None = DATALOG_TS_1,
+    datalog_timestamp: datetime = DATALOG_TS_1,
     error_message: str | None = None,
 ) -> DatalogEntryRecord:
     if raw_payload is None:
@@ -122,17 +123,17 @@ def add_datalog_entry_record(
     is_added = store.add_datalog_entry(
         sender_id=sender_id,
         datalog_index=datalog_index,
+        datalog_timestamp=datalog_timestamp,
         raw_payload=raw_payload,
         cid=cid,
         status=status,
-        datalog_timestamp=datalog_timestamp,
         error_message=error_message,
     )
     assert is_added is True
 
-    entry = store.get_datalog_entry_record(sender_id, datalog_index)
-    assert entry is not None
-    return entry
+    return get_required_datalog_entry_record(
+        store, sender_id, datalog_index, datalog_timestamp
+    )
 
 
 def add_datalog_entry_for_sender_address(
@@ -142,7 +143,7 @@ def add_datalog_entry_for_sender_address(
     raw_payload: str | None = None,
     cid: str | None = CID_1,
     status: DatalogStatus = DatalogStatus.NEW,
-    datalog_timestamp: datetime | None = DATALOG_TS_1,
+    datalog_timestamp: datetime = DATALOG_TS_1,
     error_message: str | None = None,
 ) -> tuple[SenderRecord, DatalogEntryRecord]:
     sender = get_required_sender_record(store, address)
@@ -218,7 +219,7 @@ def test_sync_senders_preserves_sender_cursor(
 ) -> None:
     sender = get_required_sender_record(synced_store)
 
-    synced_store.mark_sender_scanned(sender.id, 42)
+    synced_store.mark_sender_scanned(sender.id, 42, DATALOG_TS_1)
 
     sender_configs[0].description = "test_description1_new"
     synced_store.sync_senders(sender_configs)
@@ -226,6 +227,7 @@ def test_sync_senders_preserves_sender_cursor(
     updated = synced_store.get_sender_record_by_address(ADDRESS_1)
     assert updated is not None
     assert updated.description == "test_description1_new"
+    assert updated.last_scanned_datalog_timestamp == DATALOG_TS_1.replace(tzinfo=None)
     assert updated.last_scanned_datalog_index == 42
     assert updated.last_scanned_at is not None
 
@@ -249,10 +251,11 @@ def test_get_sender_record_by_address(synced_store: StateStore) -> None:
 def test_mark_sender_scanned_updates_cursor(synced_store: StateStore) -> None:
     sender = get_required_sender_record(synced_store)
 
-    synced_store.mark_sender_scanned(sender.id, 42)
+    synced_store.mark_sender_scanned(sender.id, 42, DATALOG_TS_1)
 
     updated = synced_store.get_sender_record_by_address(ADDRESS_1)
     assert updated is not None
+    assert updated.last_scanned_datalog_timestamp == DATALOG_TS_1.replace(tzinfo=None)
     assert updated.last_scanned_datalog_index == 42
     assert updated.last_scanned_at is not None
 
@@ -261,7 +264,7 @@ def test_mark_sender_scanned_raises_for_unknown_sender(
     store: StateStore,
 ) -> None:
     with pytest.raises(ValueError, match="Sender not found"):
-        store.mark_sender_scanned(999, 42)
+        store.mark_sender_scanned(999, 42, DATALOG_TS_1)
 
 
 def test_sync_senders_disables_missing_senders(
@@ -305,7 +308,7 @@ def test_add_datalog_entry_creates_entry(synced_store: StateStore) -> None:
     assert entry.processed_at is None
 
 
-def test_add_datalog_entry_returns_false_for_duplicate_index(
+def test_add_datalog_entry_returns_false_for_duplicate_event(
     synced_store: StateStore,
 ) -> None:
     sender, _ = add_datalog_entry_for_sender_address(synced_store)
@@ -313,13 +316,32 @@ def test_add_datalog_entry_returns_false_for_duplicate_index(
     is_added = synced_store.add_datalog_entry(
         sender_id=sender.id,
         datalog_index=1,
+        datalog_timestamp=DATALOG_TS_1,
         raw_payload=f"Test Payload: {CID_1}",
         cid=CID_1,
         status=DatalogStatus.NEW,
-        datalog_timestamp=DATALOG_TS_1,
     )
 
     assert is_added is False
+
+
+def test_add_datalog_entry_allows_reused_ring_slot_with_new_timestamp(
+    synced_store: StateStore,
+) -> None:
+    sender, _ = add_datalog_entry_for_sender_address(synced_store)
+
+    is_added = synced_store.add_datalog_entry(
+        sender_id=sender.id,
+        datalog_index=1,
+        datalog_timestamp=DATALOG_TS_2,
+        raw_payload=f"Test Payload: {CID_2}",
+        cid=CID_2,
+        status=DatalogStatus.NEW,
+    )
+
+    assert is_added is True
+    entry = get_required_datalog_entry_record(synced_store, sender.id, 1, DATALOG_TS_2)
+    assert entry.cid == CID_2
 
 
 def test_add_datalog_entry_allows_same_cid_with_different_index(

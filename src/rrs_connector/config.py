@@ -6,7 +6,6 @@ from pydantic import (
     AnyUrl,
     BaseModel,
     PositiveInt,
-    SecretStr,
     field_validator,
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -21,7 +20,6 @@ class EnvSettings(BaseSettings):
         env_file=DEFAULT_ENV_FILE, env_file_encoding="utf-8", env_prefix="RRS_"
     )
 
-    integrator_seed: SecretStr
     data_dir: Path
     state_db: Path
     poll_interval_seconds: PositiveInt

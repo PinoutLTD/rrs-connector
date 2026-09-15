@@ -6,11 +6,11 @@ Assistant senders in the Robonomics datalog, store processing state locally, and
 prepare decrypted artifacts for subsequent transfer to a separate
 administrative system.
 
-> **Current status:** Phase 1 (connector foundation) is complete, and Phase 2
-> (reliable datalog collection) is in progress. The `run-once` command already
-> loads the configuration, initializes SQLite, and synchronizes senders, but it
-> does not yet call the ready-to-use `DatalogReader`, classify events, or store
-> them. Report downloading and decryption have not been implemented yet either.
+> **Current status:** Phases 1 (connector foundation) and 2 (reliable datalog
+> collection) are complete. `run-once` reads new datalog records for every
+> enabled sender, classifies them as reports or ignored events, stores them in
+> SQLite, and advances per-sender cursors. Report downloading and decryption
+> (Phase 3) have not been implemented yet.
 
 ## Purpose and scope
 
@@ -80,16 +80,38 @@ The code is divided into layers with explicit responsibility boundaries:
 
 ### Event identity and cursor
 
-- An event is uniquely identified by the pair `(sender_id, datalog_index)`. A
-  CID is not unique: the same content can be published multiple times.
+- The datalog pallet stores records per account in a **ring buffer** of
+  `WindowSize` slots (128 on the current runtime, read from the chain constant).
+  It keeps the last `WindowSize - 1` records and reuses slots once full, so
+  `Datalog.get_index()` may return `end < start` for a busy sender. Records are
+  read by walking the ring from `start` to `end - 1` modulo `WindowSize`.
+- Because slots are reused, an event is uniquely identified by
+  `(sender_id, datalog_index, datalog_timestamp)`. A CID is not unique either:
+  the same content can be published multiple times.
+- The cursor is the timestamp of the last stored record
+  (`SenderRecord.last_scanned_datalog_timestamp`); the index is kept only for
+  information. A run reads the ring from the newest record backwards and stops
+  at the first record older than the cursor. Records with the cursor timestamp
+  itself are re-read and stored idempotently, which keeps records published in
+  the same block safe.
+- The cursor moves only after every record of a scan has been stored. If a
+  sender fails mid-scan, its cursor stays in place and the next run re-reads
+  the same records.
+- If the ring no longer contains any record at or before the cursor, older
+  reports were overwritten before being read; the run logs a gap warning. On a
+  live sender reporting every 4 hours (sometimes twice in a row) the whole ring
+  covered about 16 days, so polling must be far more frequent than that. Reading
+  a full ring takes about 20 seconds, which is why scans stop at the cursor.
 - The MVP cursor is stored directly in `SenderRecord`. A separate polling state
   model will only be needed when multiple chains, jobs, or independent
   consumers appear.
 - On the first read of a sender without a cursor, only the latest available
   event is processed. Full historical backfill should be introduced as a
   separate explicitly enabled capability.
-- `Datalog.get_index()` returns the exclusive upper bound `end`, so the last
-  index is `end - 1`.
+- Reading chain state is public, so the reader needs no keypair; the integrator
+  key is only needed later for decryption.
+- A payload that is a plain CID (CIDv0 `Qm…` or base32 CIDv1 `b…`) becomes a
+  `NEW` report event; anything else is stored as `IGNORED` with its raw payload.
 - Due to the behavior of the current `robonomics-interface` version, where the
   public `get_item(index=0)` returns the latest item, index `0` is read through
   a direct chain-storage request using the internal service API. This dependency
@@ -120,16 +142,18 @@ processing time; artifact paths are updated incrementally.
 - sender synchronization with creation, updates, and disabling without deleting
   history;
 - `StateStore` operations for cursors, events, statuses, and artifact paths;
-- `DatalogReader`: index ranges, exact item reads, latest-only first reads,
-  continuation after a cursor, and skipping empty items;
+- `DatalogReader`: ring buffer traversal with the window size read from the
+  chain, exact item reads, latest-only first reads, timestamp cursor, early stop
+  at the cursor, gap detection, and skipping empty items;
+- `run-once` collection: reading, CID classification, idempotent storage,
+  cursor advancement after a complete scan, per-sender error isolation, and a
+  run summary (new, ignored, already known events, senders with gaps);
 - structured runtime logs and a non-zero exit code on processing errors;
-- unit tests for `StateStore` and `DatalogReader` (they were not run as part of
-  this documentation update).
+- unit tests for `StateStore`, `DatalogReader`, and the collection pipeline.
 
-At present, `run-once` only loads the configuration, creates the database,
-synchronizes the sender registry, and iterates over enabled senders while
-logging. The existence of read and storage methods does not yet mean that
-end-to-end collection is complete.
+The schema changed in Phase 2 (event identity and timestamp cursor), and there
+are no migrations yet: recreate any SQLite database created by an earlier
+version.
 
 ## Configuration
 
@@ -141,7 +165,6 @@ Environment variables (usually in a local `.env` file):
 
 | Variable | Purpose |
 | --- | --- |
-| `RRS_INTEGRATOR_SEED` | integrator seed for the Robonomics account |
 | `RRS_DATA_DIR` | runtime artifact directory |
 | `RRS_STATE_DB` | path to the SQLite database |
 | `RRS_POLL_INTERVAL_SECONDS` | interval for the future periodic mode |
@@ -177,10 +200,10 @@ cp config/network.example.yaml config/network.yaml
 cp config/senders.example.yaml config/senders.yaml
 ```
 
-Then set the integrator seed in `.env`, fill in sender SS58 addresses and
-metadata in `config/senders.yaml`, and change the network, endpoint, gateway,
-timeout, and retry settings in `config/network.yaml` if necessary. `.env`
-contains a secret and must not be added to version control.
+Then fill in sender SS58 addresses and metadata in `config/senders.yaml`, and
+change the network, endpoint, gateway, timeout, and retry settings in
+`config/network.yaml` if necessary. The configuration contains no secrets:
+collection only reads public chain state.
 
 ## Usage
 
@@ -198,9 +221,9 @@ uv run rrs-connector
 ```
 
 At the current stage, the command validates the configuration, creates or opens
-the SQLite database, synchronizes the sender registry, and logs the iteration
-over enabled senders. It does not yet perform end-to-end report downloading
-and processing.
+the SQLite database, synchronizes the sender registry, collects new datalog
+events for every enabled sender, and logs a summary. It exits with code `3` if
+any sender failed. Report downloading and decryption are not performed yet.
 
 ## Tests and static checks
 
@@ -237,18 +260,13 @@ environment.
 Configuration, the CLI skeleton, the SQLite model/store, and a tested isolated
 Robonomics datalog reader are ready.
 
-### Phase 2 — reliable datalog collection (in progress)
+### Phase 2 — reliable datalog collection (complete)
 
-Remaining tasks:
-
-- connect `DatalogReader` to `run-once` for each enabled sender;
-- convert Unix milliseconds to `datetime` at the adapter/pipeline boundary;
-- recognize supported report payloads/CIDs and store all other events with
-  status `IGNORED`, preserving the raw payload;
-- store new events with uniqueness by sender/index and advance the cursor with
-  explicitly defined error behavior;
-- produce meaningful final run statistics and cover the orchestration pipeline
-  with tests.
+`DatalogReader` is connected to `run-once`: ring buffer traversal, Unix
+milliseconds converted to `datetime` at the pipeline boundary, CID
+classification with `IGNORED` events keeping the raw payload, idempotent
+storage by `(sender, index, timestamp)`, a timestamp cursor that moves only
+after a complete scan, gap detection, and a run summary, all covered by tests.
 
 ### Phase 3 — end-to-end report processing (planned)
 
