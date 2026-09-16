@@ -26,6 +26,7 @@ from rrs_connector.reports.manifest import (
     describe_files,
     write_manifest,
 )
+from rrs_connector.reports.permissions import PRIVATE, ArtifactModes, artifact_modes
 from rrs_connector.robonomics.datalog_reader import DatalogReader, DatalogScan
 from rrs_connector.state.db import (
     create_db_engine,
@@ -52,8 +53,6 @@ PENDING_STATUSES = (
 REPORTS_DIR_NAME = "reports"
 ARCHIVE_FILE_NAME = "archive.zip"
 DECRYPTED_DIR_NAME = "decrypted"
-# Decrypted reports are logs from clients' homes: owner-only access.
-PRIVATE_DIR_MODE = 0o700
 
 AccountLoader = Callable[[], Account]
 ReportDownloader = Callable[[str, Path, DownloadSettings], int]
@@ -190,10 +189,10 @@ def report_dir(data_dir: Path, sender: SenderRecord, entry: DatalogEntryRecord) 
     )
 
 
-def prepare_reports_root(data_dir: Path) -> None:
+def prepare_reports_root(data_dir: Path, modes: ArtifactModes = PRIVATE) -> None:
     reports_root = data_dir / REPORTS_DIR_NAME
     reports_root.mkdir(parents=True, exist_ok=True)
-    reports_root.chmod(PRIVATE_DIR_MODE)
+    reports_root.chmod(modes.dir_mode)
 
 
 def process_report(
@@ -204,6 +203,7 @@ def process_report(
     account: Account,
     download_settings: DownloadSettings,
     download: ReportDownloader,
+    modes: ArtifactModes = PRIVATE,
 ) -> DatalogStatus:
     """Download and decrypt one report; returns the status it ends in."""
 
@@ -215,6 +215,9 @@ def process_report(
 
     target = report_dir(data_dir, sender, entry)
     target.mkdir(parents=True, exist_ok=True)
+    # The client directory and the report directory, as created above.
+    for directory in (target.parent, target):
+        directory.chmod(modes.dir_mode)
     archive_path = target / ARCHIVE_FILE_NAME
 
     if entry.status in (DatalogStatus.NEW, DatalogStatus.FETCHING) or not (
@@ -233,6 +236,7 @@ def process_report(
                 entry.id, DatalogStatus.NEW, f"download: {e}"
             )
             return DatalogStatus.NEW
+        archive_path.chmod(modes.file_mode)
         store.upsert_report_artifact(entry.id, archive_path=archive_path)
         store.mark_datalog_entry_status(entry.id, DatalogStatus.FETCHED)
 
@@ -240,7 +244,7 @@ def process_report(
     decrypted_dir = target / DECRYPTED_DIR_NAME
     try:
         files = decrypt_archive(
-            archive_path, decrypted_dir, account, sender.robonomics_address
+            archive_path, decrypted_dir, account, sender.robonomics_address, modes
         )
     except ReportDecryptionError as e:
         store.mark_datalog_entry_status(entry.id, DatalogStatus.FAILED, f"decrypt: {e}")
@@ -263,6 +267,7 @@ def process_report(
             files=describe_files(files, target),
             processed_at=processed_at,
         ),
+        file_mode=modes.file_mode,
     )
 
     store.upsert_report_artifact(
@@ -287,6 +292,7 @@ def process_reports(
     download_settings: DownloadSettings,
     load_account: AccountLoader,
     download: ReportDownloader,
+    modes: ArtifactModes = PRIVATE,
 ) -> ReportProcessResult:
     result = ReportProcessResult()
     entries = sorted(
@@ -312,7 +318,7 @@ def process_reports(
         result.pending = len(entries)
         return result
 
-    prepare_reports_root(data_dir)
+    prepare_reports_root(data_dir, modes)
     senders: dict[int, SenderRecord] = {}
 
     for entry in entries:
@@ -325,7 +331,14 @@ def process_reports(
 
         try:
             status = process_report(
-                store, entry, sender, data_dir, account, download_settings, download
+                store,
+                entry,
+                sender,
+                data_dir,
+                account,
+                download_settings,
+                download,
+                modes,
             )
         except Exception as e:
             # Unexpected (e.g. disk) errors: keep the report for the next run.
@@ -431,6 +444,7 @@ def run_once(
             )
         ),
         download or download_report,
+        artifact_modes(env_settings.artifact_group_readable),
     )
     result.reports_processed = report_result.processed
     result.reports_pending = report_result.pending

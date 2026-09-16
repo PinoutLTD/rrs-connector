@@ -160,7 +160,12 @@ After collection, every run processes all `NEW`, `FETCHING`, `FETCHED`, and
 
 - The directory is unique per event, matching its identity.
 - Decrypted files are logs from clients' homes: `reports/` and `decrypted/` are
-  created with mode `0700` and files with `0600`.
+  created with mode `0700` and files with `0600`. On a host where the admin
+  layer runs as its own user and has to read them, set
+  `RRS_ARTIFACT_GROUP_READABLE=true`: artifacts become `0750`/`0640`, open to
+  the owning group and to nobody else. Give the reports tree that shared group
+  and the setgid bit (`chgrp -R <group> reports && chmod 2750 reports`) so new
+  directories inherit it.
 - Encrypted members are read from the zip in memory and never extracted, so
   archive entry names are never used as paths; output names come from the
   decrypted metadata and are reduced to their base name. Member count and size
@@ -271,6 +276,7 @@ Environment variables (usually in a local `.env` file):
 | `RRS_INTEGRATOR_ADDRESS` | public SS58 address of the integrator (report recipient) |
 | `RRS_PASS_VAULT` | Proton Pass vault with the integrator seed (default `Report Service`) |
 | `RRS_DATA_DIR` | runtime artifact directory |
+| `RRS_ARTIFACT_GROUP_READABLE` | artifacts `0750`/`0640` for a local reader service (default `false`) |
 | `RRS_STATE_DB` | path to the SQLite database |
 | `RRS_POLL_INTERVAL_SECONDS` | interval for the future periodic mode |
 | `RRS_NETWORK_CONFIG_FILE` | path to the network YAML file |

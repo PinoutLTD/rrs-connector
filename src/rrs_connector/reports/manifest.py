@@ -12,12 +12,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from rrs_connector.reports.permissions import PRIVATE
+
 # Bumped only on incompatible changes; readers must reject unknown versions.
 CONTRACT_VERSION = 1
 MANIFEST_FILE_NAME = "manifest.json"
 # The name rrs-ha-integration gives the issue that triggered the report.
 ISSUE_FILE_NAME = "issue_description.json"
-FILE_MODE = 0o600
 
 
 @dataclass(frozen=True)
@@ -91,7 +92,9 @@ def describe_files(files, directory: Path) -> list[ManifestFile]:
     )
 
 
-def write_manifest(directory: Path, manifest: dict) -> Path:
+def write_manifest(
+    directory: Path, manifest: dict, file_mode: int = PRIVATE.file_mode
+) -> Path:
     """Write `manifest.json` atomically; a partial file is never visible."""
 
     path = directory / MANIFEST_FILE_NAME
@@ -99,6 +102,6 @@ def write_manifest(directory: Path, manifest: dict) -> Path:
     staging_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    staging_path.chmod(FILE_MODE)
+    staging_path.chmod(file_mode)
     os.replace(staging_path, path)
     return path

@@ -16,11 +16,11 @@ from nacl.secret import SecretBox
 from robonomicsinterface import Account
 from substrateinterface import Keypair, KeypairType
 
+from rrs_connector.reports.permissions import PRIVATE, ArtifactModes
+
 MAX_ARCHIVE_MEMBERS = 32
 # HA sends at most 3 MiB of plaintext per file; hex encoding doubles it.
 MAX_MEMBER_BYTES = 32 * 1024 * 1024
-DIR_MODE = 0o700
-FILE_MODE = 0o600
 
 
 class ReportDecryptionError(RuntimeError):
@@ -121,6 +121,7 @@ def decrypt_archive(
     output_dir: Path,
     recipient_account: Account,
     sender_address: str,
+    modes: ArtifactModes = PRIVATE,
 ) -> list[DecryptedFile]:
     """Decrypt every archive member into `output_dir`, all or nothing.
 
@@ -131,11 +132,11 @@ def decrypt_archive(
 
     staging_dir = output_dir.with_name(output_dir.name + ".partial")
     shutil.rmtree(staging_dir, ignore_errors=True)
-    staging_dir.mkdir(mode=DIR_MODE, parents=True)
+    staging_dir.mkdir(mode=modes.dir_mode, parents=True)
 
     try:
         files = _decrypt_members(
-            archive_path, staging_dir, recipient_account, sender_address
+            archive_path, staging_dir, recipient_account, sender_address, modes
         )
         if output_dir.exists():
             shutil.rmtree(output_dir)
@@ -154,6 +155,7 @@ def _decrypt_members(
     staging_dir: Path,
     recipient_account: Account,
     sender_address: str,
+    modes: ArtifactModes,
 ) -> list[DecryptedFile]:
     try:
         archive = ZipFile(archive_path)
@@ -191,7 +193,7 @@ def _decrypt_members(
                 raise ReportDecryptionError(f"duplicate file name in archive: {name}")
             data = str(payload).encode("utf-8")
             path.write_bytes(data)
-            path.chmod(FILE_MODE)
+            path.chmod(modes.file_mode)
             files.append(DecryptedFile(name, path, len(data)))
 
     return sorted(files, key=lambda file: file.name)

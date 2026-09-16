@@ -153,9 +153,9 @@ def reader() -> FakeReader:
 
 @pytest.fixture
 def run(env_settings, network_config, sender_registry, reader, recipient_account):
-    def run(registry=None, load_account=None, download=unavailable_download):
+    def run(registry=None, load_account=None, download=unavailable_download, env=None):
         return run_once(
-            env_settings,
+            env or env_settings,
             network_config,
             registry or sender_registry,
             reader,
@@ -519,3 +519,53 @@ def test_timestamp_conversion_round_trip() -> None:
     assert datetime_to_ms(value.replace(tzinfo=None)) == TIMESTAMP_1
     assert datetime_to_ms(None) is None
     assert ms_to_datetime(0) == datetime(1970, 1, 1, tzinfo=UTC)
+
+
+# Artifact permissions
+
+
+def artifact_modes_in(report: Path) -> tuple[int, int, int]:
+    return (
+        stat.S_IMODE(report.stat().st_mode),
+        stat.S_IMODE((report / "decrypted").stat().st_mode),
+        stat.S_IMODE((report / "manifest.json").stat().st_mode),
+    )
+
+
+def test_artifacts_are_owner_only_by_default(
+    run, env_settings, reader, ha_registry, ha_report_archive, sender_address
+) -> None:
+    reader.publish(sender_address, 0, TIMESTAMP_1, CID_1)
+
+    run(registry=ha_registry, download=ArchiveDownloader(ha_report_archive))
+
+    reports_root = env_settings.data_dir / "reports"
+    report = reports_root / "ha-home" / f"datalog_0_{TIMESTAMP_1}"
+    assert stat.S_IMODE(reports_root.stat().st_mode) == 0o700
+    assert artifact_modes_in(report) == (0o700, 0o700, 0o600)
+    assert stat.S_IMODE((report / "archive.zip").stat().st_mode) == 0o600
+    log = report / "decrypted" / "home-assistant.log"
+    assert stat.S_IMODE(log.stat().st_mode) == 0o600
+
+
+def test_artifacts_open_to_the_group_when_configured(
+    run, env_settings, reader, ha_registry, ha_report_archive, sender_address
+) -> None:
+    # A separate local service reads the reports under its own user.
+    env_settings = env_settings.model_copy(update={"artifact_group_readable": True})
+    reader.publish(sender_address, 0, TIMESTAMP_1, CID_1)
+
+    run(
+        registry=ha_registry,
+        download=ArchiveDownloader(ha_report_archive),
+        env=env_settings,
+    )
+
+    reports_root = env_settings.data_dir / "reports"
+    report = reports_root / "ha-home" / f"datalog_0_{TIMESTAMP_1}"
+    assert stat.S_IMODE(reports_root.stat().st_mode) == 0o750
+    assert artifact_modes_in(report) == (0o750, 0o750, 0o640)
+    assert stat.S_IMODE((report / "archive.zip").stat().st_mode) == 0o640
+    # Still nothing for other users.
+    for path in (reports_root, report, report / "archive.zip"):
+        assert not stat.S_IMODE(path.stat().st_mode) & 0o007

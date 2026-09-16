@@ -35,6 +35,9 @@ class EnvSettings(BaseSettings):
     integrator_address: str
     pass_vault: str = "Report Service"
     data_dir: Path
+    # True when a separate local service (the helpdesk layer) reads the
+    # artifacts under its own user: artifacts open to the owning group only.
+    artifact_group_readable: bool = False
     state_db: Path
     poll_interval_seconds: PositiveInt
     network_config_file: Path
