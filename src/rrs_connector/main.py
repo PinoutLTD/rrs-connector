@@ -1,8 +1,10 @@
 import argparse
 import logging
 import sys
+from pathlib import Path
 
 from rrs_connector.config import load_settings
+from rrs_connector.fetch import fetch
 from rrs_connector.logging_config import setup_logging
 from rrs_connector.pipeline import RunOnceResult, run_once
 
@@ -10,10 +12,31 @@ LOGGER = logging.getLogger(__name__)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--command", type=str, choices=["run-once"], default="run-once")
+    parser = argparse.ArgumentParser(
+        description="Collect Robonomics Report Service reports"
+    )
+    parser.add_argument(
+        "--command", type=str, choices=["run-once", "fetch"], default="run-once"
+    )
+    fetch_group = parser.add_argument_group(
+        "fetch", "One-off decryption; leaves the state database and the pipeline alone"
+    )
+    fetch_group.add_argument("--sender", help="SS58 address that published the report")
+    fetch_group.add_argument(
+        "--cid", action="append", default=[], help="report CID (may be repeated)"
+    )
+    fetch_group.add_argument(
+        "--last", type=int, help="fetch this many of the sender's latest reports"
+    )
+    fetch_group.add_argument("--output", type=Path, help="where to put the reports")
     args = parser.parse_args()
     command = args.command
+
+    if command == "fetch":
+        if not args.sender:
+            parser.error("--sender is required for fetch")
+        if bool(args.cid) == bool(args.last):
+            parser.error("choose either --cid (one or more) or --last N")
 
     setup_logging()
 
@@ -45,6 +68,16 @@ def main() -> int:
     )
 
     try:
+        if command == "fetch":
+            return fetch(
+                env_settings,
+                network_config,
+                sender_address=args.sender,
+                cids=args.cid,
+                last=args.last,
+                output_dir=args.output,
+            ).exit_code
+
         if command == "run-once":
             result: RunOnceResult = run_once(
                 env_settings, network_config, sender_registry
