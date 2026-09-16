@@ -1,0 +1,32 @@
+[Unit]
+Description=Robonomics Report Service connector (collect, download, decrypt)
+Documentation=https://github.com/PinoutLTD/rrs-connector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=rrs-connector
+Group=rrs-connector
+WorkingDirectory=/mnt/disk/pinout-report-service/rrs-connector
+Environment=PROTON_PASS_SESSION_DIR=/var/lib/rrs-connector/pass-session
+# The token file stays root-only; systemd hands a copy to this unit alone.
+LoadCredential=token:/etc/rrs/connector.token
+ExecStart=/mnt/disk/pinout-report-service/rrs-connector/deploy/session.sh \
+    /mnt/disk/pinout-report-service/rrs-connector/.venv/bin/rrs-connector \
+    --command run-once
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/mnt/disk/pinout-report-service/data/connector /var/lib/rrs-connector
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictRealtime=true
+LockPersonality=true
+# RestrictSUIDSGID is deliberately not set: the connector puts setgid on the
+# report directories so the helpdesk layer inherits the shared group.
+
+[Install]
+WantedBy=multi-user.target
