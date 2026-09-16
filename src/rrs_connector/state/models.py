@@ -36,6 +36,11 @@ class SenderRecord(DbBase):
 
     # MVP: The cursor is stored in senders.
     # Future: Move to a separate sender_poll_state.
+    # The cursor is the timestamp: datalog slots are reused once the ring
+    # buffer wraps, so the index alone is only informational.
+    last_scanned_datalog_timestamp: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     last_scanned_datalog_index: Mapped[int | None] = mapped_column(
         Integer, nullable=True
     )
@@ -77,15 +82,17 @@ class DatalogEntryRecord(DbBase):
 
     __tablename__ = "datalog_entries"
     __table_args__ = (
-        UniqueConstraint("sender_id", "datalog_index"),
+        # The index is a reusable ring buffer slot, so the timestamp is part of
+        # the event identity.
+        UniqueConstraint("sender_id", "datalog_index", "datalog_timestamp"),
         Index("ix_datalog_entries_sender_id_cid", "sender_id", "cid"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     sender_id: Mapped[int] = mapped_column(ForeignKey("senders.id"), nullable=False)
     datalog_index: Mapped[int] = mapped_column(Integer, nullable=False)
-    datalog_timestamp: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
+    datalog_timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
     )
     raw_payload: Mapped[str | None] = mapped_column(Text, nullable=True)
     cid: Mapped[str | None] = mapped_column(Text, nullable=True)

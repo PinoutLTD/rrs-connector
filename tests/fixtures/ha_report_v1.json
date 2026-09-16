@@ -1,0 +1,21 @@
+{
+  "generated_by": "rrs-ha-integration utils/encrypt_tools.py @ e4fe8e6 (archive layout as in utils/file_handler.py)",
+  "sender_seed": "frozen woman pet meat entire question balcony wing echo excess adjust sleep",
+  "sender_address": "4GEGoUCyDw2FhnFtniYfo1xTqxBUhKZYRWkWyJ8BamqadVxp",
+  "recipient_seed": "lens exchange drum inside current bullet include stamp purity decline absurd play",
+  "recipient_address": "4DNteL1am4a3JBt2XE4cwrZ4YYxQztjMFUUdkrv24EgSvXfz",
+  "files": {
+    "issue_description.json": {
+      "sha256": "1773ec4845e4b7b3dab743880405731d2772a0ad399227f5783b3d304daa18f7",
+      "size": 1582
+    },
+    "home-assistant.log": {
+      "sha256": "7c2d6fafb9979acf35ec0692525f0e4eb4bd7a0cad73437f023a411a9559786c",
+      "size": 627
+    },
+    "trace.saved_traces": {
+      "sha256": "8a64f86809980c5c15d1ba6f9fc695d5deeab5de137a721742e2ea3f628f98dd",
+      "size": 105
+    }
+  }
+}

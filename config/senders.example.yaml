@@ -1,11 +1,12 @@
+# client_id is the site slug shared with the field engineer's repository
+# (lowercase, dashes), so the report, the ticket, and the site card use one key.
 senders:
-  - client_id: ""
+  - client_id: "qube-block-a-301"
     robonomics_address: ""
-    description: ""
+    description: "Qube, block A, apartment 301"
     enabled: true
-  
-  - client_id: ""
+
+  - client_id: "del-mar-24f"
     robonomics_address: ""
-    description: ""
-    enabled: true
-  
+    description: "Del Mar, 24F"
+    enabled: false

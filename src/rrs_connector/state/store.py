@@ -79,6 +79,12 @@ class StateStore:
             )
             return list(session.scalars(stmt).all())
 
+    def get_sender_record_by_id(self, sender_id: int) -> SenderRecord | None:
+        """Return one sender record by primary key, if it exists."""
+
+        with self._session_factory() as session:
+            return session.get(SenderRecord, sender_id)
+
     def get_sender_record_by_address(self, address: str) -> SenderRecord | None:
         """Return one sender record by Robonomics address, if it exists."""
 
@@ -88,8 +94,13 @@ class StateStore:
             )
             return session.scalar(stmt)
 
-    def mark_sender_scanned(self, sender_id: int, datalog_index: int) -> None:
-        """Move a sender datalog cursor to the last scanned index."""
+    def mark_sender_scanned(
+        self,
+        sender_id: int,
+        datalog_index: int,
+        datalog_timestamp: datetime,
+    ) -> None:
+        """Move a sender datalog cursor to the last stored record."""
 
         with self._session_factory() as session:
             sender_record = session.get(SenderRecord, sender_id)
@@ -97,6 +108,7 @@ class StateStore:
             if sender_record is None:
                 raise ValueError(f"Sender not found: {sender_id}")
 
+            sender_record.last_scanned_datalog_timestamp = datalog_timestamp
             sender_record.last_scanned_datalog_index = datalog_index
             sender_record.last_scanned_at = datetime.now(UTC)
 
@@ -106,17 +118,17 @@ class StateStore:
         self,
         sender_id: int,
         datalog_index: int,
+        datalog_timestamp: datetime,
         raw_payload: str | None,
         cid: str | None,
         status: DatalogStatus,
-        datalog_timestamp: datetime | None = None,
         error_message: str | None = None,
     ) -> bool:
         """
         Store one observed datalog entry.
 
         Returns True when a new row is inserted. Returns False when the
-        sender/index pair already exists.
+        sender/index/timestamp event already exists.
         """
         with self._session_factory() as session:
             sender_record = session.get(SenderRecord, sender_id)
@@ -127,6 +139,7 @@ class StateStore:
                 select(DatalogEntryRecord).where(
                     DatalogEntryRecord.sender_id == sender_id,
                     DatalogEntryRecord.datalog_index == datalog_index,
+                    DatalogEntryRecord.datalog_timestamp == datalog_timestamp,
                 )
             )
 
@@ -151,14 +164,16 @@ class StateStore:
         self,
         sender_id: int,
         datalog_index: int,
+        datalog_timestamp: datetime,
     ) -> DatalogEntryRecord | None:
-        """Return one datalog entry by sender/index pair, if it exists."""
+        """Return one datalog entry by its sender/index/timestamp identity."""
 
         with self._session_factory() as session:
             return session.scalar(
                 select(DatalogEntryRecord).where(
                     DatalogEntryRecord.sender_id == sender_id,
                     DatalogEntryRecord.datalog_index == datalog_index,
+                    DatalogEntryRecord.datalog_timestamp == datalog_timestamp,
                 )
             )
 
@@ -173,7 +188,7 @@ class StateStore:
                 select(DatalogEntryRecord)
                 .where(DatalogEntryRecord.status == status)
                 .order_by(
-                    DatalogEntryRecord.sender_id, DatalogEntryRecord.datalog_index
+                    DatalogEntryRecord.sender_id, DatalogEntryRecord.datalog_timestamp
                 )
             )
             return list(session.scalars(stmt).all())

@@ -2,7 +2,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from robonomicsinterface import Account, Datalog
-from substrateinterface import KeypairType
+from substrateinterface import SubstrateInterface
 
 
 @dataclass(frozen=True)
@@ -19,10 +19,33 @@ class DatalogIndexRange:
     end: int
 
 
+@dataclass(frozen=True)
+class DatalogScan:
+    """Records at or after the cursor, oldest to newest.
+
+    `reached_cursor` is False when a cursor was given but the ring buffer no
+    longer holds a record at or before it: older records were overwritten
+    before they could be read.
+    """
+
+    records: list[DatalogRecord]
+    reached_cursor: bool
+
+
+def ring_buffer_indices(index_range: DatalogIndexRange, window_size: int) -> list[int]:
+    """Datalog slots from oldest to newest.
+
+    The datalog pallet keeps the last `window_size - 1` records per account and
+    reuses slots once full, so `end < start` means the buffer has wrapped.
+    """
+    start, end = index_range.start, index_range.end
+    count = end - start if start <= end else window_size + end - start
+    return [(start + offset) % window_size for offset in range(count)]
+
+
 class DatalogReader:
     def __init__(
         self,
-        recipient_seed: str,
         wss_endpoints: Sequence[str],
         request_timeout_seconds: int,
     ) -> None:
@@ -32,15 +55,16 @@ class DatalogReader:
             raise ValueError("At least one WSS endpoint is required")
 
         self.current_wss: str = self.wss_endpoints[0]
-        self.recipient_account: Account = Account(
-            recipient_seed,
-            crypto_type=KeypairType.ED25519,
-            remote_ws=self.current_wss,
-        )
+        # Reading chain state is public, so no keypair is needed here.
+        self.datalog = Datalog(Account(remote_ws=self.current_wss))
+        self._window_size: int | None = None
 
-        self.datalog = Datalog(
-            self.recipient_account, rws_sub_owner=self.recipient_account.get_address()
-        )
+    def get_window_size(self) -> int:
+        if self._window_size is None:
+            with SubstrateInterface(url=self.current_wss) as substrate:
+                constant = substrate.get_constant("Datalog", "WindowSize")
+                self._window_size = int(constant.value)
+        return self._window_size
 
     def get_index_range(self, sender_address: str) -> DatalogIndexRange:
         index_info = self.datalog.get_index(sender_address)
@@ -75,24 +99,41 @@ class DatalogReader:
     def list_new_records(
         self,
         sender_address: str,
-        last_scanned_datalog_index: int | None,
-    ) -> list[DatalogRecord]:
+        cursor_timestamp_ms: int | None,
+    ) -> DatalogScan:
+        """Read records not older than the cursor.
 
-        index_range = self.get_index_range(sender_address)
+        Without a cursor only the latest record is returned. Records with the
+        cursor timestamp itself are included, so callers must store them
+        idempotently; this keeps records published in the same block safe.
+        """
+        indices = ring_buffer_indices(
+            self.get_index_range(sender_address), self.get_window_size()
+        )
 
-        if index_range.end <= index_range.start:
-            return []
+        if not indices:
+            return DatalogScan(records=[], reached_cursor=True)
 
-        if last_scanned_datalog_index is None:
-            first_index = max(index_range.start, index_range.end - 1)
-        else:
-            first_index = max(index_range.start, last_scanned_datalog_index + 1)
+        if cursor_timestamp_ms is None:
+            for index in reversed(indices):
+                record = self.get_item(sender_address, index)
+                if record is not None:
+                    return DatalogScan(records=[record], reached_cursor=True)
+            return DatalogScan(records=[], reached_cursor=True)
 
-        records: list[DatalogRecord] = []
+        newest_first: list[DatalogRecord] = []
+        reached_cursor = False
 
-        for index in range(first_index, index_range.end):
+        for index in reversed(indices):
             record = self.get_item(sender_address, index)
-            if record is not None:
-                records.append(record)
+            if record is None:
+                continue
+            if record.timestamp_ms <= cursor_timestamp_ms:
+                reached_cursor = True
+            if record.timestamp_ms < cursor_timestamp_ms:
+                break
+            newest_first.append(record)
 
-        return records
+        return DatalogScan(
+            records=list(reversed(newest_first)), reached_cursor=reached_cursor
+        )
