@@ -21,6 +21,11 @@ from rrs_connector.reports.fetcher import (
     ReportTooLargeError,
     download_report,
 )
+from rrs_connector.reports.manifest import (
+    build_manifest,
+    describe_files,
+    write_manifest,
+)
 from rrs_connector.robonomics.datalog_reader import DatalogReader, DatalogScan
 from rrs_connector.state.db import (
     create_db_engine,
@@ -169,13 +174,18 @@ def safe_path_part(value: str) -> str:
     return cleaned or "unknown"
 
 
+def client_key(sender: SenderRecord) -> str:
+    """Identity of a client in paths and in the manifest contract."""
+
+    return safe_path_part(sender.client_id or sender.robonomics_address)
+
+
 def report_dir(data_dir: Path, sender: SenderRecord, entry: DatalogEntryRecord) -> Path:
-    client = safe_path_part(sender.client_id or sender.robonomics_address)
     timestamp_ms = datetime_to_ms(entry.datalog_timestamp)
     return (
         data_dir
         / REPORTS_DIR_NAME
-        / client
+        / client_key(sender)
         / f"datalog_{entry.datalog_index}_{timestamp_ms}"
     )
 
@@ -236,8 +246,30 @@ def process_report(
         store.mark_datalog_entry_status(entry.id, DatalogStatus.FAILED, f"decrypt: {e}")
         return DatalogStatus.FAILED
 
+    # The manifest is written last: its presence means the report is complete
+    # and may be read by the admin layer.
+    processed_at = datetime.now(UTC)
+    manifest_path = write_manifest(
+        target,
+        build_manifest(
+            client_id=client_key(sender),
+            sender_address=sender.robonomics_address,
+            datalog_index=entry.datalog_index,
+            datalog_timestamp=ms_to_datetime(datetime_to_ms(entry.datalog_timestamp)),
+            cid=entry.cid,
+            directory=target,
+            archive_path=archive_path,
+            decrypted_dir=decrypted_dir,
+            files=describe_files(files, target),
+            processed_at=processed_at,
+        ),
+    )
+
     store.upsert_report_artifact(
-        entry.id, decrypted_dir=decrypted_dir, processed_at=datetime.now(UTC)
+        entry.id,
+        decrypted_dir=decrypted_dir,
+        meta_path=manifest_path,
+        processed_at=processed_at,
     )
     store.mark_datalog_entry_status(entry.id, DatalogStatus.PROCESSED)
     LOGGER.info(

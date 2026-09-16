@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 import shutil
 import stat
@@ -326,6 +327,49 @@ def test_report_is_downloaded_and_decrypted(
         assert hashlib.sha256(data).hexdigest() == expected["sha256"]
     reports_root = env_settings.data_dir / "reports"
     assert stat.S_IMODE(reports_root.stat().st_mode) == 0o700
+
+
+def test_manifest_describes_the_processed_report(
+    run, env_settings, reader, ha_registry, ha_report, ha_report_archive, sender_address
+) -> None:
+    reader.publish(sender_address, 7, TIMESTAMP_1, CID_1)
+
+    run(registry=ha_registry, download=ArchiveDownloader(ha_report_archive))
+
+    store = open_store(env_settings)
+    entry = only_entry(store)
+    report = env_settings.data_dir / "reports" / "ha-home" / f"datalog_7_{TIMESTAMP_1}"
+    manifest = json.loads((report / "manifest.json").read_text("utf-8"))
+    assert manifest["contract_version"] == 1
+    assert manifest["report_id"] == f"ha-home/datalog_7_{TIMESTAMP_1}"
+    assert manifest["client_id"] == "ha-home"
+    assert manifest["sender_address"] == sender_address
+    assert manifest["datalog_index"] == 7
+    assert manifest["datalog_timestamp"] == ms_to_datetime(TIMESTAMP_1).isoformat()
+    assert manifest["cid"] == CID_1
+    assert manifest["issue_file"] == "decrypted/issue_description.json"
+    assert manifest["archive"] == {
+        "path": "archive.zip",
+        "size_bytes": ha_report_archive.stat().st_size,
+    }
+    assert [file["name"] for file in manifest["files"]] == sorted(ha_report["files"])
+    for file in manifest["files"]:
+        assert (report / file["path"]).stat().st_size == file["size_bytes"]
+    assert store.get_report_artifact_record(entry.id).meta_path == str(
+        report / "manifest.json"
+    )
+
+
+def test_unfinished_report_has_no_manifest(
+    run, env_settings, reader, ha_report_archive
+) -> None:
+    # ADDRESS_1 is not the key that encrypted the golden archive.
+    reader.publish(ADDRESS_1, 0, TIMESTAMP_1, CID_1)
+
+    run(download=ArchiveDownloader(ha_report_archive))
+
+    reports = env_settings.data_dir / "reports"
+    assert list(reports.rglob("manifest.json")) == []
 
 
 def test_processed_report_is_not_downloaded_again(

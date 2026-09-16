@@ -6,11 +6,12 @@ Assistant senders in the Robonomics datalog, store processing state locally, and
 prepare decrypted artifacts for subsequent transfer to a separate
 administrative system.
 
-> **Current status:** Phases 1–3 are complete. `run-once` collects new datalog
-> records for every enabled sender, downloads each report archive from IPFS,
-> decrypts it with the integrator key read from Proton Pass, and stores the
-> decrypted files and processing state. The contract for the Odoo helpdesk
-> layer (Phase 5) is next.
+> **Current status:** Phases 1–3 are complete and the contract with the admin
+> layer is defined. `run-once` collects new datalog records for every enabled
+> sender, downloads each report archive from IPFS, decrypts it with the
+> integrator key read from Proton Pass, stores the decrypted files and
+> processing state, and writes a `manifest.json` per report. Building the
+> reader of those manifests (the Odoo helpdesk layer) is next.
 
 ## Purpose and scope
 
@@ -61,6 +62,8 @@ The code is divided into layers with explicit responsibility boundaries:
   knowledge of the encryption format;
 - `reports/decryptor.py` — envelope decryption and file name restoration,
   without access to Robonomics;
+- `reports/manifest.py` — the `manifest.json` contract handed to the admin
+  layer, built from paths and sizes only;
 - `proton_pass.py` — reading the integrator seed from Proton Pass via
   `pass-cli`;
 - `pipeline.py` — coordination of layers and state transitions;
@@ -147,6 +150,7 @@ After collection, every run processes all `NEW`, `FETCHING`, `FETCHED`, and
 
 ```text
 <RRS_DATA_DIR>/reports/<client_id>/datalog_<index>_<timestamp_ms>/
+  manifest.json        # the contract below; written last, means "ready"
   archive.zip          # encrypted archive as downloaded
   decrypted/
     issue_description.json
@@ -166,6 +170,51 @@ After collection, every run processes all `NEW`, `FETCHING`, `FETCHED`, and
   and renamed when complete.
 - The format is pinned by `tests/fixtures/ha_report_v1.zip`, produced by
   rrs-ha-integration's own encryption code.
+
+### Contract with the admin layer
+
+A processed report is handed over as a file, not through the connector's
+SQLite: the admin layer (the Odoo helpdesk layer) polls report directories and
+reads `manifest.json`. The manifest is written atomically as the very last
+step, so a directory that has one is complete and safe to read; a directory
+without one is still being worked on, failed, or was interrupted.
+
+```json
+{
+  "contract_version": 1,
+  "report_id": "qube-block-a-301/datalog_94_1789114351000",
+  "client_id": "qube-block-a-301",
+  "sender_address": "4GRQ…",
+  "datalog_index": 94,
+  "datalog_timestamp": "2026-09-14T08:12:31+00:00",
+  "cid": "QmWue3…",
+  "processed_at": "2026-09-14T09:00:00+00:00",
+  "archive": { "path": "archive.zip", "size_bytes": 3987123 },
+  "decrypted_dir": "decrypted",
+  "issue_file": "decrypted/issue_description.json",
+  "files": [
+    { "name": "home-assistant.log", "path": "decrypted/home-assistant.log", "size_bytes": 1048576 },
+    { "name": "issue_description.json", "path": "decrypted/issue_description.json", "size_bytes": 2048 },
+    { "name": "trace.saved_traces", "path": "decrypted/trace.saved_traces", "size_bytes": 65536 }
+  ]
+}
+```
+
+- `report_id` is the report's path under `reports/` and is unique: the datalog
+  index alone is a reusable ring buffer slot, so the timestamp is part of it.
+  A reader can use it as its own primary key.
+- All paths are relative to the directory holding the manifest, so the data
+  directory can be moved or mounted elsewhere.
+- `issue_file` is `null` when the report carries logs only (a report sent
+  without an issue). Its contents are produced by rrs-ha-integration
+  (`type`, `email`, `schema_version`, `ts_start`, `ts_end`, `summary`,
+  `details`) and are read by the admin layer, not interpreted here.
+- `contract_version` is bumped only on incompatible changes; a reader must
+  refuse versions it does not know.
+- A report that is processed again (for example after a failure) gets its
+  manifest rewritten in place, atomically.
+- Nothing is deleted yet: retention of archives and decrypted files is still
+  open, so a reader must not assume the files stay forever.
 
 ### Integrator key
 
@@ -197,6 +246,8 @@ After collection, every run processes all `NEW`, `FETCHING`, `FETCHED`, and
   cursor advancement after a complete scan, per-sender error isolation, and a
   run summary (new, ignored, already known events, senders with gaps);
 - structured runtime logs and a non-zero exit code on processing errors;
+- the `manifest.json` contract for the admin layer, written atomically as the
+  last step of processing;
 - report processing: gateway downloads with retries and size limits,
   multi-envelope decryption compatible with rrs-ha-integration, private
   artifact layout, resumable statuses, and the integrator seed from Proton Pass;
@@ -224,6 +275,10 @@ Environment variables (usually in a local `.env` file):
 | `RRS_POLL_INTERVAL_SECONDS` | interval for the future periodic mode |
 | `RRS_NETWORK_CONFIG_FILE` | path to the network YAML file |
 | `RRS_SENDERS_CONFIG_FILE` | path to the sender registry YAML file |
+
+`client_id` must be a site slug in lowercase with dashes (for example
+`qube-block-a-301`) — the same key the field engineer's repository uses for the
+site card, so a report, its ticket, and the card are found by one identifier.
 
 The network endpoint, IPFS gateway, timeout, and retry format is shown in
 `config/network.example.yaml`; the registry format is shown in
@@ -346,8 +401,9 @@ Currently, the reader selects only the first WSS endpoint, and the request
 timeout it accepts is not applied. IPFS gateway failover, timeouts, and retries
 are already applied by the fetcher.
 
-### Phase 5 — stable transfer to admin systems (planned)
+### Phase 5 — stable transfer to admin systems (contract defined)
 
-After the artifacts and Phase 3 model have stabilized, a supported contract for
-reading processed reports by a separate admin/Odoo layer must be defined,
-without moving the UI and administrative business processes into the connector.
+`manifest.json` (see "Contract with the admin layer") is the supported
+interface for reading processed reports. The admin/Odoo layer itself lives in
+its own repository: the UI and the administrative business processes stay out
+of the connector.

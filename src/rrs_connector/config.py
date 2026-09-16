@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -13,6 +14,10 @@ from substrateinterface.utils.ss58 import is_valid_ss58_address
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ENV_FILE = PROJECT_ROOT / ".env"
+
+# The same slug the field engineer's repository uses for a site, so reports,
+# tickets, and the site card are found by one key.
+CLIENT_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
 def validate_ss58_address(address: str) -> str:
@@ -70,6 +75,16 @@ class SenderConfig(BaseModel):
     robonomics_address: str
     description: str
     enabled: bool
+
+    @field_validator("client_id", mode="after")
+    @classmethod
+    def is_client_slug(cls, client_id: str) -> str:
+        if not CLIENT_ID_PATTERN.match(client_id):
+            raise ValueError(
+                f"{client_id!r} is not a valid client_id: use the site slug in "
+                "lowercase with dashes, for example 'qube-block-a-301'"
+            )
+        return client_id
 
     @field_validator("robonomics_address", mode="after")
     @classmethod
