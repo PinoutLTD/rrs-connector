@@ -27,6 +27,7 @@ from rrs_connector.reports.manifest import (
     write_manifest,
 )
 from rrs_connector.reports.permissions import PRIVATE, ArtifactModes, artifact_modes
+from rrs_connector.reports.retention import apply_retention
 from rrs_connector.robonomics.datalog_reader import DatalogReader, DatalogScan
 from rrs_connector.state.db import (
     create_db_engine,
@@ -93,6 +94,7 @@ class RunOnceResult:
     reports_processed: int = 0
     reports_pending: int = 0
     reports_failed: int = 0
+    reports_removed: int = 0
     integrator_key_unavailable: bool = False
 
     @property
@@ -450,6 +452,18 @@ def run_once(
     result.reports_pending = report_result.pending
     result.reports_failed = report_result.failed
     result.integrator_key_unavailable = report_result.key_unavailable
+
+    # Cleanup runs last: a failure here must not cost us the reports we just
+    # collected, so it is reported and does not fail the run.
+    try:
+        retention = apply_retention(
+            store,
+            env_settings.keep_decrypted_days,
+            env_settings.keep_archive_days,
+        )
+        result.reports_removed = retention.reports_removed
+    except Exception:
+        LOGGER.exception("Retention pass failed")
 
     LOGGER.info(
         "Run once is completed: senders processed=%d/%d failed=%d skipped=%d; "

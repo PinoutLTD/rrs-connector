@@ -1,0 +1,13 @@
+[Unit]
+Description=Hourly collection of Robonomics reports
+
+[Timer]
+# The datalog ring holds roughly three weeks for an active site, so hourly is
+# far inside the safe window and keeps gateway load low.
+OnCalendar=hourly
+RandomizedDelaySec=2m
+Persistent=true
+Unit=rrs-connector.service
+
+[Install]
+WantedBy=timers.target

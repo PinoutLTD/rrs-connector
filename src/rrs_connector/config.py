@@ -38,6 +38,11 @@ class EnvSettings(BaseSettings):
     # True when a separate local service (the helpdesk layer) reads the
     # artifacts under its own user: artifacts open to the owning group only.
     artifact_group_readable: bool = False
+    # Days to keep artifacts after processing; 0 keeps that kind forever.
+    # Decrypted files are plaintext logs from a client's home, so they go
+    # first; the encrypted archive can be fetched from IPFS again.
+    keep_decrypted_days: int = 7
+    keep_archive_days: int = 30
     state_db: Path
     poll_interval_seconds: PositiveInt
     network_config_file: Path

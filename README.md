@@ -176,6 +176,25 @@ After collection, every run processes all `NEW`, `FETCHING`, `FETCHED`, and
 - The format is pinned by `tests/fixtures/ha_report_v1.zip`, produced by
   rrs-ha-integration's own encryption code.
 
+### Retention
+
+Reports are not kept forever: an active site sends several a day, and the
+decrypted files are plaintext logs from a client's home. Every run ends with a
+retention pass, counted from the moment a report was processed:
+
+- after `RRS_KEEP_DECRYPTED_DAYS` the `decrypted/` directory is deleted — by
+  then the admin layer has read the report and attached the files to a ticket;
+- after `RRS_KEEP_ARCHIVE_DAYS` the archive follows. It is encrypted and can be
+  downloaded from IPFS again while the client's pin lives, so it is the cheaper
+  copy to keep;
+- once both are gone the report directory, manifest included, is removed: an
+  empty directory would only advertise a report whose files no longer exist.
+
+Deleted paths are cleared in `report_artifacts`, so the state never points at
+files that are not there. A failure in this pass is logged and does not fail
+the run — cleanup must never cost us the reports just collected. Setting an age
+to `0` keeps that kind of artifact indefinitely.
+
 ### Contract with the admin layer
 
 A processed report is handed over as a file, not through the connector's
@@ -218,8 +237,8 @@ without one is still being worked on, failed, or was interrupted.
   refuse versions it does not know.
 - A report that is processed again (for example after a failure) gets its
   manifest rewritten in place, atomically.
-- Nothing is deleted yet: retention of archives and decrypted files is still
-  open, so a reader must not assume the files stay forever.
+- Files do not stay forever (see "Retention"), so a reader should attach what
+  is there and not assume every listed file still exists.
 
 ### Integrator key
 
@@ -258,6 +277,7 @@ without one is still being worked on, failed, or was interrupted.
 - structured runtime logs and a non-zero exit code on processing errors;
 - the `manifest.json` contract for the admin layer, written atomically as the
   last step of processing;
+- retention of decrypted files, archives and whole report directories by age;
 - report processing: gateway downloads with retries and size limits,
   multi-envelope decryption compatible with rrs-ha-integration, private
   artifact layout, resumable statuses, and the integrator seed from Proton Pass;
@@ -282,6 +302,8 @@ Environment variables (usually in a local `.env` file):
 | `RRS_PASS_VAULT` | Proton Pass vault with the integrator seed (default `Report Service`) |
 | `RRS_DATA_DIR` | runtime artifact directory |
 | `RRS_ARTIFACT_GROUP_READABLE` | artifacts `0750`/`0640` for a local reader service (default `false`) |
+| `RRS_KEEP_DECRYPTED_DAYS` | days to keep decrypted files after processing (default `7`, `0` keeps them) |
+| `RRS_KEEP_ARCHIVE_DAYS` | days to keep the encrypted archive (default `30`, `0` keeps it) |
 | `RRS_STATE_DB` | path to the SQLite database |
 | `RRS_POLL_INTERVAL_SECONDS` | interval for the future periodic mode |
 | `RRS_NETWORK_CONFIG_FILE` | path to the network YAML file |
@@ -400,13 +422,13 @@ Retention of downloaded archives and decrypted files is not handled yet.
 
 ### Phase 4 — operational CLI and network resilience (planned)
 
-- periodic mode;
 - commands for viewing state and reprocessing;
 - retry/failover for multiple WSS endpoints;
 - applying the configured datalog request timeout and retry parameters;
-- retention of report archives and decrypted files;
-- a deployment option for a small Linux host (for example, systemd or a
-  container).
+- a liveness alert for a site that has gone quiet.
+
+Retention and a systemd deployment (`deploy/`) are done; periodic running is
+the timer's job, so the connector itself stays a one-shot command.
 
 Currently, the reader selects only the first WSS endpoint, and the request
 timeout it accepts is not applied. IPFS gateway failover, timeouts, and retries

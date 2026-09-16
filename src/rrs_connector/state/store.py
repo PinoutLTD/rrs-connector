@@ -243,6 +243,42 @@ class StateStore:
                 )
             )
 
+    def list_report_artifact_records(self) -> list[ReportArtifactRecord]:
+        """Return every stored artifact record, oldest processing first."""
+
+        with self._session_factory() as session:
+            stmt = select(ReportArtifactRecord).order_by(
+                ReportArtifactRecord.processed_at, ReportArtifactRecord.id
+            )
+            return list(session.scalars(stmt).all())
+
+    def clear_report_artifact_paths(
+        self,
+        datalog_entry_id: int,
+        archive: bool = False,
+        decrypted: bool = False,
+        meta: bool = False,
+    ) -> None:
+        """Forget paths whose files have been deleted, so the state stays true."""
+
+        with self._session_factory() as session:
+            record = session.scalar(
+                select(ReportArtifactRecord).where(
+                    ReportArtifactRecord.datalog_entry_id == datalog_entry_id
+                )
+            )
+            if record is None:
+                return
+
+            if archive:
+                record.archive_path = None
+            if decrypted:
+                record.decrypted_dir = None
+            if meta:
+                record.meta_path = None
+
+            session.commit()
+
     def upsert_report_artifact(
         self,
         datalog_entry_id: int,
