@@ -17,7 +17,9 @@ class ArtifactModes:
 
 
 PRIVATE = ArtifactModes(dir_mode=0o700, file_mode=0o600)
-GROUP_READABLE = ArtifactModes(dir_mode=0o750, file_mode=0o640)
+# setgid: new files and directories inherit the shared group, whether or not
+# the service user happens to be a member of it.
+GROUP_READABLE = ArtifactModes(dir_mode=0o2750, file_mode=0o640)
 
 
 def artifact_modes(group_readable: bool) -> ArtifactModes:

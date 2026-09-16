@@ -563,8 +563,9 @@ def test_artifacts_open_to_the_group_when_configured(
 
     reports_root = env_settings.data_dir / "reports"
     report = reports_root / "ha-home" / f"datalog_0_{TIMESTAMP_1}"
-    assert stat.S_IMODE(reports_root.stat().st_mode) == 0o750
-    assert artifact_modes_in(report) == (0o750, 0o750, 0o640)
+    # setgid on the directories: new artifacts inherit the shared group.
+    assert stat.S_IMODE(reports_root.stat().st_mode) == 0o2750
+    assert artifact_modes_in(report) == (0o2750, 0o2750, 0o640)
     assert stat.S_IMODE((report / "archive.zip").stat().st_mode) == 0o640
     # Still nothing for other users.
     for path in (reports_root, report, report / "archive.zip"):

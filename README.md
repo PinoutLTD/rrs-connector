@@ -162,10 +162,10 @@ After collection, every run processes all `NEW`, `FETCHING`, `FETCHED`, and
 - Decrypted files are logs from clients' homes: `reports/` and `decrypted/` are
   created with mode `0700` and files with `0600`. On a host where the admin
   layer runs as its own user and has to read them, set
-  `RRS_ARTIFACT_GROUP_READABLE=true`: artifacts become `0750`/`0640`, open to
-  the owning group and to nobody else. Give the reports tree that shared group
-  and the setgid bit (`chgrp -R <group> reports && chmod 2750 reports`) so new
-  directories inherit it.
+  `RRS_ARTIFACT_GROUP_READABLE=true`: artifacts become `2750`/`0640`, open to
+  the owning group and to nobody else. The setgid bit is set by the connector
+  itself, so new files and directories inherit the group; the deployment only
+  has to give the reports tree that shared group (`chgrp -R <group> reports`).
 - Encrypted members are read from the zip in memory and never extracted, so
   archive entry names are never used as paths; output names come from the
   decrypted metadata and are reduced to their base name. Member count and size

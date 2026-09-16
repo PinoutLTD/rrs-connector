@@ -132,7 +132,9 @@ def decrypt_archive(
 
     staging_dir = output_dir.with_name(output_dir.name + ".partial")
     shutil.rmtree(staging_dir, ignore_errors=True)
-    staging_dir.mkdir(mode=modes.dir_mode, parents=True)
+    staging_dir.mkdir(parents=True)
+    # mkdir's mode argument is masked and drops setgid, so set it explicitly.
+    staging_dir.chmod(modes.dir_mode)
 
     try:
         files = _decrypt_members(
