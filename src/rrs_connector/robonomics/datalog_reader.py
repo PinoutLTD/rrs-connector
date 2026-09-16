@@ -96,6 +96,26 @@ class DatalogReader:
             payload=str(datalog_content),
         )
 
+    def list_last_records(self, sender_address: str, count: int) -> list[DatalogRecord]:
+        """The newest `count` records still held by the ring, oldest first."""
+
+        if count < 1:
+            raise ValueError("count must be at least 1")
+
+        indices = ring_buffer_indices(
+            self.get_index_range(sender_address), self.get_window_size()
+        )
+        newest_first: list[DatalogRecord] = []
+
+        for index in reversed(indices):
+            record = self.get_item(sender_address, index)
+            if record is not None:
+                newest_first.append(record)
+            if len(newest_first) == count:
+                break
+
+        return list(reversed(newest_first))
+
     def list_new_records(
         self,
         sender_address: str,

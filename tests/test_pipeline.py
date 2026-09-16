@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from rrs_connector.config import EnvSettings, NetworkConfig, SenderRegistryConfig
+from rrs_connector.config import EnvSettings, SenderRegistryConfig
 from rrs_connector.pipeline import (
     NOT_A_REPORT_MESSAGE,
     datetime_to_ms,
@@ -99,39 +99,6 @@ def registry_for(*senders: tuple[str, str]) -> SenderRegistryConfig:
                 }
                 for client_id, address in senders
             ]
-        }
-    )
-
-
-@pytest.fixture
-def env_settings(tmp_path: Path, ha_report) -> EnvSettings:
-    return EnvSettings(
-        _env_file=None,
-        integrator_address=ha_report["recipient_address"],
-        data_dir=tmp_path / "data",
-        state_db=tmp_path / "data" / "state.sqlite3",
-        poll_interval_seconds=600,
-        network_config_file=tmp_path / "network.yaml",
-        senders_config_file=tmp_path / "senders.yaml",
-    )
-
-
-@pytest.fixture
-def network_config() -> NetworkConfig:
-    return NetworkConfig.model_validate(
-        {
-            "network": "polkadot",
-            "wss": {
-                "polkadot": ["wss://polkadot.rpc.robonomics.network/"],
-                "kusama": ["wss://kusama.rpc.robonomics.network/"],
-            },
-            "ipfs_gateways": ["https://gateway.pinata.cloud/"],
-            "timeouts": {"datalog_request_seconds": 15, "ipfs_download_seconds": 60},
-            "retries": {
-                "datalog_request_max_attempts": 3,
-                "ipfs_download_max_attempts": 3,
-                "retry_backoff_seconds": 2,
-            },
         }
     )
 

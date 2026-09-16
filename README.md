@@ -396,6 +396,27 @@ The pytest configuration disables automatic loading of third-party global
 plugins so that results do not depend on packages installed outside the project
 environment.
 
+## Fetching one report by hand
+
+The scheduled run only looks forward from its cursor and deletes artifacts by
+age. When a person asks about a specific report — "it broke on Thursday", or a
+report retention already removed while IPFS still holds it — `fetch` decrypts
+it without touching the state database or the pipeline's artifacts:
+
+```bash
+uv run rrs-connector --command fetch --sender 4Efp… --cid QmVnrF… --output ./support-case
+```
+
+```bash
+uv run rrs-connector --command fetch --sender 4Efp… --last 2
+```
+
+`--cid` may be repeated; `--last N` takes the newest N reports the sender's
+ring buffer still holds. Without `--output` the reports land in
+`<RRS_DATA_DIR>/fetched/<sender>/`. Files are owner-only, and they are
+plaintext logs from a client's home: delete them once the question is
+answered.
+
 ## Development roadmap
 
 ### Phase 1 — connector foundation (complete)
