@@ -231,6 +231,11 @@ without one is still being worked on, failed, or was interrupted.
   Proton Pass agent token limited to that item and log in with
   `PROTON_PASS_PERSONAL_ACCESS_TOKEN`; `PROTON_PASS_AGENT_REASON` is set
   automatically unless provided.
+- A token granted a single item cannot see the vault that holds it, so the
+  vault name is not an address it can use. When the lookup by vault fails, the
+  item is found in `pass-cli share list` by title and read through its own
+  share; `RRS_PASS_VAULT` still describes where the item lives for a human
+  session.
 
 ## Implemented so far
 

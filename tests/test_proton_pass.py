@@ -1,3 +1,4 @@
+import json
 import subprocess
 
 import pytest
@@ -97,3 +98,77 @@ def test_load_integrator_account_rejects_seed_for_other_address(
 
     with pytest.raises(SecretUnavailableError, match="does not derive"):
         load_integrator_account(ha_report["sender_address"], "Report Service")
+
+
+class FakeSequence:
+    """Answers each pass-cli call from a queue, keyed by the command."""
+
+    def __init__(self, answers: list[tuple[int, str]]) -> None:
+        self.answers = answers
+        self.calls: list[list[str]] = []
+
+    def __call__(self, command, **kwargs):
+        self.calls.append(command)
+        returncode, stdout = self.answers[len(self.calls) - 1]
+        return subprocess.CompletedProcess(command, returncode, stdout, "")
+
+
+SHARE_LIST = json.dumps(
+    {
+        "shares": [
+            {"id": "other-share", "name": "Something else", "share_type": "Item"},
+            {"id": "item-share-id", "name": "Item", "share_type": "Item"},
+            {"id": "vault-share-id", "name": "Item", "share_type": "Vault"},
+        ]
+    }
+)
+
+
+def test_item_granted_token_reads_through_its_own_share(monkeypatch) -> None:
+    # A token granted one item cannot see the vault that holds it.
+    fake = FakeSequence(
+        [
+            (1, ""),  # --vault-name: Could not find vault
+            (0, SHARE_LIST),
+            (0, "value\n"),
+        ]
+    )
+    monkeypatch.setattr(proton_pass.subprocess, "run", fake)
+
+    secret = read_pass_field("Report Service", "Item", "seed", reason="Why")
+
+    assert secret.get_secret_value() == "value"
+    assert fake.calls[1] == ["pass-cli", "share", "list", "--output", "json"]
+    assert fake.calls[2] == [
+        "pass-cli", "item", "view",
+        "--share-id", "item-share-id",
+        "--item-title", "Item",
+        "--field", "seed",
+    ]  # fmt: skip
+
+
+def test_vault_access_is_used_without_listing_shares(monkeypatch) -> None:
+    fake = FakeSequence([(0, "value\n")])
+    monkeypatch.setattr(proton_pass.subprocess, "run", fake)
+
+    read_pass_field("Report Service", "Item", "seed", reason="Why")
+
+    assert len(fake.calls) == 1
+
+
+def test_token_without_access_to_the_item_is_reported(monkeypatch) -> None:
+    fake = FakeSequence([(1, ""), (0, json.dumps({"shares": []}))])
+    monkeypatch.setattr(proton_pass.subprocess, "run", fake)
+
+    with pytest.raises(SecretUnavailableError, match="access to the item"):
+        read_pass_field("Report Service", "Item", "seed", reason="Why")
+
+
+def test_unreadable_share_list_does_not_mask_the_original_failure(
+    monkeypatch,
+) -> None:
+    fake = FakeSequence([(1, ""), (0, "not json")])
+    monkeypatch.setattr(proton_pass.subprocess, "run", fake)
+
+    with pytest.raises(SecretUnavailableError):
+        read_pass_field("Report Service", "Item", "seed", reason="Why")
