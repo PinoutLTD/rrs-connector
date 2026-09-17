@@ -27,6 +27,7 @@ from rrs_connector.reports.manifest import (
     write_manifest,
 )
 from rrs_connector.reports.permissions import PRIVATE, ArtifactModes, artifact_modes
+from rrs_connector.reports.recipients import RecipientKeys
 from rrs_connector.reports.retention import apply_retention
 from rrs_connector.robonomics.datalog_reader import DatalogReader, DatalogScan
 from rrs_connector.state.db import (
@@ -55,7 +56,14 @@ REPORTS_DIR_NAME = "reports"
 ARCHIVE_FILE_NAME = "archive.zip"
 DECRYPTED_DIR_NAME = "decrypted"
 
-AccountLoader = Callable[[], Account]
+# Loads the key for one recipient address; raises when it cannot.
+AccountLoader = Callable[[str], Account]
+
+
+class RecipientKeyUnavailable(RuntimeError):
+    """The report needs a key that cannot be loaded right now."""
+
+
 ReportDownloader = Callable[[str, Path, DownloadSettings], int]
 
 
@@ -202,12 +210,16 @@ def process_report(
     entry: DatalogEntryRecord,
     sender: SenderRecord,
     data_dir: Path,
-    account: Account,
+    keys: RecipientKeys,
     download_settings: DownloadSettings,
     download: ReportDownloader,
     modes: ArtifactModes = PRIVATE,
 ) -> DatalogStatus:
-    """Download and decrypt one report; returns the status it ends in."""
+    """Download and decrypt one report; returns the status it ends in.
+
+    Raises RecipientKeyUnavailable when the key the report needs cannot be
+    loaded: the downloaded archive is kept and the report resumes next run.
+    """
 
     if not entry.cid:
         store.mark_datalog_entry_status(
@@ -241,6 +253,22 @@ def process_report(
         archive_path.chmod(modes.file_mode)
         store.upsert_report_artifact(entry.id, archive_path=archive_path)
         store.mark_datalog_entry_status(entry.id, DatalogStatus.FETCHED)
+
+    # The envelope names the addresses the report is encrypted for; that
+    # decides which of our keys is needed.
+    try:
+        recipient = keys.choose(archive_path)
+    except ReportDecryptionError as e:
+        store.mark_datalog_entry_status(entry.id, DatalogStatus.FAILED, f"decrypt: {e}")
+        return DatalogStatus.FAILED
+
+    try:
+        account = keys.account(recipient)
+    except Exception as e:
+        store.mark_datalog_entry_status(
+            entry.id, DatalogStatus.FETCHED, f"key {recipient}: {e}"
+        )
+        raise RecipientKeyUnavailable(recipient) from e
 
     store.mark_datalog_entry_status(entry.id, DatalogStatus.DECRYPTING)
     decrypted_dir = target / DECRYPTED_DIR_NAME
@@ -292,6 +320,7 @@ def process_reports(
     store: StateStore,
     data_dir: Path,
     download_settings: DownloadSettings,
+    recipient_addresses: list[str],
     load_account: AccountLoader,
     download: ReportDownloader,
     modes: ArtifactModes = PRIVATE,
@@ -308,18 +337,8 @@ def process_reports(
     if not entries:
         return result
 
-    try:
-        account = load_account()
-    except Exception as e:
-        LOGGER.error(
-            "Cannot load the integrator key, %d report(s) left pending: %s",
-            len(entries),
-            e,
-        )
-        result.key_unavailable = True
-        result.pending = len(entries)
-        return result
-
+    # Keys are loaded lazily: only those the pending reports actually need.
+    keys = RecipientKeys(recipient_addresses, load_account)
     prepare_reports_root(data_dir, modes)
     senders: dict[int, SenderRecord] = {}
 
@@ -337,11 +356,21 @@ def process_reports(
                 entry,
                 sender,
                 data_dir,
-                account,
+                keys,
                 download_settings,
                 download,
                 modes,
             )
+        except RecipientKeyUnavailable as e:
+            LOGGER.error(
+                "Cannot load recipient key %s, datalog #%d of %s left pending: %s",
+                e,
+                entry.datalog_index,
+                sender.client_id,
+                e.__cause__,
+            )
+            result.key_unavailable = True
+            status = DatalogStatus.FETCHED
         except Exception as e:
             # Unexpected (e.g. disk) errors: keep the report for the next run.
             LOGGER.exception(
@@ -439,12 +468,9 @@ def run_once(
         store,
         env_settings.data_dir,
         create_download_settings(network_config),
+        env_settings.integrator_addresses,
         load_account
-        or (
-            lambda: load_integrator_account(
-                env_settings.integrator_address, env_settings.pass_vault
-            )
-        ),
+        or (lambda address: load_integrator_account(address, env_settings.pass_vault)),
         download or download_report,
         artifact_modes(env_settings.artifact_group_readable),
     )

@@ -11,8 +11,6 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from robonomicsinterface import Account
-
 from rrs_connector.config import EnvSettings, NetworkConfig
 from rrs_connector.pipeline import (
     ARCHIVE_FILE_NAME,
@@ -32,6 +30,7 @@ from rrs_connector.reports.decryptor import (
 )
 from rrs_connector.reports.fetcher import ReportDownloadError, download_report
 from rrs_connector.reports.permissions import PRIVATE
+from rrs_connector.reports.recipients import RecipientKeys
 from rrs_connector.robonomics.datalog_reader import DatalogReader
 
 LOGGER = logging.getLogger(__name__)
@@ -84,7 +83,7 @@ def fetch_report(
     report: RequestedReport,
     target: Path,
     sender_address: str,
-    account: Account,
+    keys: RecipientKeys,
     download_settings,
     download: ReportDownloader,
 ) -> list[DecryptedFile]:
@@ -96,6 +95,7 @@ def fetch_report(
         download(report.cid, archive_path, download_settings)
         archive_path.chmod(PRIVATE.file_mode)
 
+    account = keys.account(keys.choose(archive_path))
     return decrypt_archive(
         archive_path, target / DECRYPTED_DIR_NAME, account, sender_address, PRIVATE
     )
@@ -124,14 +124,11 @@ def fetch(
         LOGGER.warning("Nothing to fetch for %s", sender_address)
         return result
 
-    account = (
+    keys = RecipientKeys(
+        env_settings.integrator_addresses,
         load_account
-        or (
-            lambda: load_integrator_account(
-                env_settings.integrator_address, env_settings.pass_vault
-            )
-        )
-    )()
+        or (lambda address: load_integrator_account(address, env_settings.pass_vault)),
+    )
 
     root = output_dir or (
         env_settings.data_dir / FETCHED_DIR_NAME / safe_path_part(sender_address)
@@ -148,7 +145,7 @@ def fetch(
                 report,
                 target,
                 sender_address,
-                account,
+                keys,
                 download_settings,
                 downloader,
             )

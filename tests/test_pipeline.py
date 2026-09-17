@@ -126,7 +126,7 @@ def run(env_settings, network_config, sender_registry, reader, recipient_account
             network_config,
             registry or sender_registry,
             reader,
-            load_account=load_account or (lambda: recipient_account),
+            load_account=load_account or (lambda address: recipient_account),
             download=download,
         )
 
@@ -414,22 +414,30 @@ def test_unavailable_integrator_key_leaves_reports_pending(
     reader.publish(sender_address, 0, TIMESTAMP_1, CID_1)
     downloader = ArchiveDownloader(ha_report_archive)
 
-    def missing_key():
+    def missing_key(address):
         raise SecretUnavailableError("pass-cli session expired")
 
-    result = run(registry=ha_registry, load_account=missing_key, download=downloader)
+    first = run(registry=ha_registry, load_account=missing_key, download=downloader)
 
-    assert result.integrator_key_unavailable is True
-    assert result.reports_pending == 1
-    assert result.exit_code == 3
-    assert only_entry(open_store(env_settings)).status == DatalogStatus.NEW
-    assert downloader.calls == []
+    # The key is chosen from the downloaded archive, so the archive is fetched
+    # and kept: the next run goes straight to decryption.
+    entry = only_entry(open_store(env_settings))
+    assert first.integrator_key_unavailable is True
+    assert first.reports_pending == 1
+    assert first.exit_code == 3
+    assert entry.status == DatalogStatus.FETCHED
+    assert entry.error_message.startswith("key ")
+
+    second = run(registry=ha_registry, download=downloader)
+
+    assert second.reports_processed == 1
+    assert downloader.calls == [CID_1]
 
 
 def test_integrator_key_is_not_loaded_without_pending_reports(run) -> None:
     loads: list[bool] = []
 
-    result = run(load_account=lambda: loads.append(True))
+    result = run(load_account=lambda address: loads.append(True))
 
     assert loads == []
     assert result.exit_code == 0
