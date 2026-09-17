@@ -258,6 +258,12 @@ without one is still being worked on, failed, or was interrupted.
   pending, and the run exits with code `3`.
 - Recipient keys only decrypt. They are not the keys that own RWS
   subscriptions; those never reach this service.
+- A new recipient key is created with
+  `rrs-connector --command new-recipient-key` from an interactive `pass-cli`
+  session. The seed is generated in memory, handed to `pass-cli` through
+  stdin, read back once to prove the stored copy derives the same address, and
+  never printed, written to disk or put on the clipboard; only the public
+  address and the next steps are shown.
 - Locally, an interactive `pass-cli login` session is enough. On a server, use a
   Proton Pass agent token granted exactly the recipient items and log in with
   `PROTON_PASS_PERSONAL_ACCESS_TOKEN`; `PROTON_PASS_AGENT_REASON` is set
