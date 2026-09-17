@@ -16,13 +16,16 @@ class SecretUnavailableError(RuntimeError):
     pass
 
 
-def run_pass_cli(arguments: list[str], reason: str) -> subprocess.CompletedProcess:
+def run_pass_cli(
+    arguments: list[str], reason: str, stdin: str | None = None
+) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     # Required by pass-cli when running under an agent token.
     env.setdefault("PROTON_PASS_AGENT_REASON", reason)
     try:
         return subprocess.run(
             ["pass-cli", *arguments],
+            input=stdin,
             capture_output=True,
             text=True,
             env=env,

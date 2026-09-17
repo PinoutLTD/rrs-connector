@@ -64,3 +64,52 @@ def network_config() -> NetworkConfig:
             },
         }
     )
+
+
+def build_report_archive(
+    path: Path,
+    sender: Account,
+    recipient_addresses: list[str],
+    files: dict[str, str],
+) -> Path:
+    """A report archive in rrs-ha-integration's format, for any recipients.
+
+    The golden fixture covers byte compatibility with the integration; this
+    builds reports for key combinations the fixture cannot provide.
+    """
+
+    import secrets
+    import zipfile
+
+    from nacl.secret import SecretBox
+    from substrateinterface import Keypair
+
+    with zipfile.ZipFile(path, "w") as archive:
+        for number, (name, text) in enumerate(files.items()):
+            secret_key = secrets.token_bytes(32)
+            payload = json.dumps({"payload": text, "meta": {"orig_file_name": name}})
+            addresses = set(recipient_addresses) | {sender.get_address()}
+            package = {
+                "data": "0x"
+                + bytes(SecretBox(secret_key).encrypt(payload.encode())).hex(),
+                "keys": {
+                    address: "0x"
+                    + sender.keypair.encrypt_message(
+                        secret_key,
+                        Keypair(
+                            ss58_address=address, crypto_type=KeypairType.ED25519
+                        ).public_key,
+                    ).hex()
+                    for address in addresses
+                },
+            }
+            archive.writestr(f"member{number}.enc", json.dumps(package))
+    return path
+
+
+def ed25519_account(mnemonic: str | None = None) -> Account:
+    from substrateinterface import Keypair
+
+    return Account(
+        mnemonic or Keypair.generate_mnemonic(), crypto_type=KeypairType.ED25519
+    )

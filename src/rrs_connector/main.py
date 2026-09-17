@@ -5,6 +5,7 @@ from pathlib import Path
 
 from rrs_connector.config import load_settings
 from rrs_connector.fetch import fetch
+from rrs_connector.keygen import KeygenError, create_recipient_key
 from rrs_connector.logging_config import setup_logging
 from rrs_connector.pipeline import RunOnceResult, run_once
 
@@ -16,7 +17,10 @@ def main() -> int:
         description="Collect Robonomics Report Service reports"
     )
     parser.add_argument(
-        "--command", type=str, choices=["run-once", "fetch"], default="run-once"
+        "--command",
+        type=str,
+        choices=["run-once", "fetch", "new-recipient-key"],
+        default="run-once",
     )
     fetch_group = parser.add_argument_group(
         "fetch", "One-off decryption; leaves the state database and the pipeline alone"
@@ -39,6 +43,9 @@ def main() -> int:
             parser.error("choose either --cid (one or more) or --last N")
 
     setup_logging()
+
+    if command == "new-recipient-key":
+        return new_recipient_key()
 
     LOGGER.info("Starting rrs-connector")
 
@@ -86,6 +93,36 @@ def main() -> int:
     except Exception:
         LOGGER.exception("Application failed")
         return 1
+
+
+def new_recipient_key() -> int:
+    """Create a recipient key in Proton Pass; print only what is public."""
+
+    import os
+
+    vault = os.environ.get("RRS_PASS_VAULT", "Report Service")
+    try:
+        key = create_recipient_key(vault)
+    except KeygenError as e:
+        LOGGER.error("%s", e)
+        return 1
+
+    print(
+        f"""
+Recipient key created in vault '{key.vault}', item '{key.item_title}'.
+
+Address: {key.address}
+
+Next:
+  1. Give the connector's agent token access to this one item:
+     pass-cli agent access grant rrs-connector --vault-name "{key.vault}" \\
+       --item-title "{key.item_title}" --role viewer
+  2. Add the address to RRS_INTEGRATOR_ADDRESSES on the server, keeping the
+     old one: sites already configured still encrypt for it.
+  3. Use the address as "Problem service address" when installing new sites.
+"""
+    )
+    return 0
 
 
 if __name__ == "__main__":

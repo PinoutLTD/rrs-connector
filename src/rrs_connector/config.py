@@ -1,6 +1,6 @@
 import re
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import yaml
 from pydantic import (
@@ -8,8 +8,9 @@ from pydantic import (
     BaseModel,
     PositiveInt,
     field_validator,
+    model_validator,
 )
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from substrateinterface.utils.ss58 import is_valid_ss58_address
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -31,8 +32,12 @@ class EnvSettings(BaseSettings):
         env_file=DEFAULT_ENV_FILE, env_file_encoding="utf-8", env_prefix="RRS_"
     )
 
-    # Public address only; its seed is read from Proton Pass when decrypting.
-    integrator_address: str
+    # Public addresses only; each seed is read from Proton Pass when a report
+    # encrypted for that address is decrypted. Several recipient keys can be in
+    # service at once — reports name the one they need. Order is preference.
+    integrator_addresses: Annotated[list[str], NoDecode] = []
+    # The single-key setting from before; merged into the list above.
+    integrator_address: str | None = None
     pass_vault: str = "Report Service"
     data_dir: Path
     # True when a separate local service (the helpdesk layer) reads the
@@ -48,10 +53,26 @@ class EnvSettings(BaseSettings):
     network_config_file: Path
     senders_config_file: Path
 
-    @field_validator("integrator_address", mode="after")
+    @field_validator("integrator_addresses", mode="before")
     @classmethod
-    def is_integrator_address(cls, address: str) -> str:
-        return validate_ss58_address(address)
+    def split_addresses(cls, value):
+        if isinstance(value, str):
+            return [address.strip() for address in value.split(",") if address.strip()]
+        return value
+
+    @model_validator(mode="after")
+    def collect_recipient_addresses(self) -> "EnvSettings":
+        addresses = list(dict.fromkeys(self.integrator_addresses))
+        if self.integrator_address and self.integrator_address not in addresses:
+            addresses.append(self.integrator_address)
+        if not addresses:
+            raise ValueError(
+                "no recipient key configured: set RRS_INTEGRATOR_ADDRESSES"
+            )
+        for address in addresses:
+            validate_ss58_address(address)
+        self.integrator_addresses = addresses
+        return self
 
 
 class WssConfig(BaseModel):

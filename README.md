@@ -240,21 +240,37 @@ without one is still being worked on, failed, or was interrupted.
 - Files do not stay forever (see "Retention"), so a reader should attach what
   is there and not assume every listed file still exists.
 
-### Integrator key
+### Recipient keys
 
-- Only the public integrator address is configured (`RRS_INTEGRATOR_ADDRESS`).
-  The seed is read with `pass-cli` from vault `RRS_PASS_VAULT`, item
+- Only public addresses are configured (`RRS_INTEGRATOR_ADDRESSES`). Each seed
+  is read with `pass-cli` from vault `RRS_PASS_VAULT`, item
   `Robonomics - <address>`, field `seed`, kept in memory only, and must derive
-  exactly the configured address.
+  exactly that address.
+- Several recipient keys can be in service at once — for example the key
+  existing sites already encrypt for and a fresh one for new installs. The
+  report itself says which is needed: every encrypted file lists its recipient
+  addresses in the clear, so the connector intersects that list with its own
+  and loads only the matching key, once per run. Nothing is tried blindly.
+- Only configured addresses are ever looked up in Proton Pass. The envelope
+  comes from outside; it chooses among our keys and never names new ones.
+- A report encrypted for none of our addresses fails with the addresses it was
+  encrypted for. A key that cannot be loaded leaves its reports downloaded and
+  pending, and the run exits with code `3`.
+- Recipient keys only decrypt. They are not the keys that own RWS
+  subscriptions; those never reach this service.
+- A new recipient key is created with
+  `rrs-connector --command new-recipient-key` from an interactive `pass-cli`
+  session. The seed is generated in memory, handed to `pass-cli` through
+  stdin, read back once to prove the stored copy derives the same address, and
+  never printed, written to disk or put on the clipboard; only the public
+  address and the next steps are shown.
 - Locally, an interactive `pass-cli login` session is enough. On a server, use a
-  Proton Pass agent token limited to that item and log in with
+  Proton Pass agent token granted exactly the recipient items and log in with
   `PROTON_PASS_PERSONAL_ACCESS_TOKEN`; `PROTON_PASS_AGENT_REASON` is set
   automatically unless provided.
-- A token granted a single item cannot see the vault that holds it, so the
-  vault name is not an address it can use. When the lookup by vault fails, the
-  item is found in `pass-cli share list` by title and read through its own
-  share; `RRS_PASS_VAULT` still describes where the item lives for a human
-  session.
+- A token granted single items cannot see the vault that holds them, so when
+  the lookup by vault fails, each item is found in `pass-cli share list` by
+  title and read through its own share.
 
 ## Implemented so far
 
@@ -298,7 +314,8 @@ Environment variables (usually in a local `.env` file):
 
 | Variable | Purpose |
 | --- | --- |
-| `RRS_INTEGRATOR_ADDRESS` | public SS58 address of the integrator (report recipient) |
+| `RRS_INTEGRATOR_ADDRESSES` | public SS58 addresses of the recipient keys, comma-separated, in order of preference |
+| `RRS_INTEGRATOR_ADDRESS` | the older single-address setting; merged into the list above |
 | `RRS_PASS_VAULT` | Proton Pass vault with the integrator seed (default `Report Service`) |
 | `RRS_DATA_DIR` | runtime artifact directory |
 | `RRS_ARTIFACT_GROUP_READABLE` | artifacts `0750`/`0640` for a local reader service (default `false`) |

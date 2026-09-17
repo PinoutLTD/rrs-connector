@@ -27,7 +27,7 @@ class FakeLastRecords:
 def run_fetch(env_settings, network_config, recipient_account, ha_report_archive):
     def run(sender_address, **kwargs):
         kwargs.setdefault("download", ArchiveDownloader(ha_report_archive))
-        kwargs.setdefault("load_account", lambda: recipient_account)
+        kwargs.setdefault("load_account", lambda address: recipient_account)
         return fetch(env_settings, network_config, sender_address, **kwargs)
 
     return run
@@ -150,7 +150,7 @@ def test_key_is_not_loaded_when_there_is_nothing_to_fetch(
         sender_address,
         last=1,
         reader=FakeLastRecords([]),
-        load_account=lambda: loaded.append(True),
+        load_account=lambda address: loaded.append(True),
         download=unavailable_download,
     )
 
