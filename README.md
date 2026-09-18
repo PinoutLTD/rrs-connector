@@ -82,6 +82,10 @@ The code is divided into layers with explicit responsibility boundaries:
 - The YAML registry is the source of truth for current metadata and the
   `enabled` flag. A sender removed from the configuration is disabled in the
   database but not deleted: its cursor and history are preserved.
+- A sender's first run reads only its latest record, unless the registry gives
+  it `history_from`: then every record from that moment on is read, and none
+  before. This registers a site that has been publishing for a while without
+  turning its old reports into new tickets.
 
 ### Event identity and cursor
 

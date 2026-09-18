@@ -132,11 +132,16 @@ def collect_sender_events(
     store: StateStore,
     reader: DatalogSource,
     sender: SenderRecord,
+    history_from: datetime | None = None,
 ) -> SenderCollectResult:
     result = SenderCollectResult()
     cursor_ms = datetime_to_ms(sender.last_scanned_datalog_timestamp)
+    # A site not scanned yet starts from its configured history point, if any:
+    # every record since then is read, and a site silent since then yields none.
+    history_ms = datetime_to_ms(history_from) if history_from is not None else None
+    start_ms = cursor_ms if cursor_ms is not None else history_ms
 
-    scan = reader.list_new_records(sender.robonomics_address, cursor_ms)
+    scan = reader.list_new_records(sender.robonomics_address, start_ms)
 
     if cursor_ms is not None and not scan.reached_cursor:
         result.gap = True
@@ -148,6 +153,9 @@ def collect_sender_events(
         )
 
     for record in scan.records:
+        before_history = history_ms is not None and record.timestamp_ms < history_ms
+        if cursor_ms is None and before_history:
+            continue
         cid = extract_report_cid(record.payload)
         is_added = store.add_datalog_entry(
             sender_id=sender.id,
@@ -438,9 +446,12 @@ def run_once(
         skipped=len(sender_registry.senders) - len(sender_records),
     )
 
+    history_from = {s.client_id: s.history_from for s in sender_registry.senders}
     for sender in sender_records:
         try:
-            sender_result = collect_sender_events(store, reader, sender)
+            sender_result = collect_sender_events(
+                store, reader, sender, history_from.get(sender.client_id)
+            )
         except Exception:
             LOGGER.exception(
                 "Error during processing sender %s (%s)",
