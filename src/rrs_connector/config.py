@@ -1,4 +1,5 @@
 import re
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -104,6 +105,25 @@ class SenderConfig(BaseModel):
     robonomics_address: str
     description: str
     enabled: bool
+    # Where reading starts for a site the connector has not scanned yet. Without
+    # it the first run takes only the site's latest record; with it, every
+    # record from this moment on, and none before. Ignored once the site has a
+    # cursor. A date means midnight UTC.
+    history_from: datetime | None = None
+
+    @field_validator("history_from", mode="before")
+    @classmethod
+    def date_is_midnight_utc(cls, value):
+        if isinstance(value, date) and not isinstance(value, datetime):
+            return datetime(value.year, value.month, value.day, tzinfo=UTC)
+        return value
+
+    @field_validator("history_from", mode="after")
+    @classmethod
+    def is_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value
 
     @field_validator("client_id", mode="after")
     @classmethod

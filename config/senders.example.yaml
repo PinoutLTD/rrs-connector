@@ -1,10 +1,22 @@
 # client_id is the site slug shared with the field engineer's repository
 # (lowercase, dashes), so the report, the ticket, and the site card use one key.
+#
+# history_from (optional): where reading starts for a site not scanned yet.
+# Without it the first run takes only the site's latest record; with it, every
+# record from that moment on and none before — useful when a site that has been
+# publishing for months is registered and only recent reports should become
+# tickets. A date means midnight UTC. Ignored once the site has been scanned.
 senders:
   - client_id: "qube-block-a-301"
     robonomics_address: ""
     description: "Qube, block A, apartment 301"
     enabled: true
+
+  - client_id: "qube-block-a-106"
+    robonomics_address: ""
+    description: "Qube, block A, apartment 106"
+    enabled: true
+    history_from: 2026-09-11
 
   - client_id: "del-mar-24f"
     robonomics_address: ""

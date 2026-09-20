@@ -545,3 +545,60 @@ def test_artifacts_open_to_the_group_when_configured(
     # Still nothing for other users.
     for path in (reports_root, report, report / "archive.zip"):
         assert not stat.S_IMODE(path.stat().st_mode) & 0o007
+
+
+def registry_with_history(history_from) -> SenderRegistryConfig:
+    return SenderRegistryConfig.model_validate(
+        {
+            "senders": [
+                {
+                    "client_id": "qube-block-a-106",
+                    "robonomics_address": ADDRESS_1,
+                    "description": "Qube A106",
+                    "enabled": True,
+                    "history_from": history_from,
+                }
+            ]
+        }
+    )
+
+
+def test_history_from_reads_every_record_since_then_on_the_first_run(
+    run, env_settings, reader
+) -> None:
+    reader.publish(ADDRESS_1, 0, TIMESTAMP_1, CID_1)
+    reader.publish(ADDRESS_1, 1, TIMESTAMP_2, CID_2)
+    reader.publish(ADDRESS_1, 2, TIMESTAMP_3, CID_3)
+    between = datetime.fromtimestamp((TIMESTAMP_1 + TIMESTAMP_2) / 2000, tz=UTC)
+
+    result = run(registry=registry_with_history(between))
+
+    store = open_store(env_settings)
+    assert entries_for(store, DatalogStatus.NEW) == [(CID_2, 1), (CID_3, 2)]
+    assert result.new_events == 2
+    sender = store.get_sender_record_by_address(ADDRESS_1)
+    assert datetime_to_ms(sender.last_scanned_datalog_timestamp) == TIMESTAMP_3
+
+
+def test_a_site_silent_since_history_from_yields_nothing_until_it_reports(
+    run, env_settings, reader
+) -> None:
+    reader.publish(ADDRESS_1, 0, TIMESTAMP_1, CID_1)
+    after = datetime.fromtimestamp(TIMESTAMP_2 / 1000, tz=UTC)
+
+    assert run(registry=registry_with_history(after)).new_events == 0
+    store = open_store(env_settings)
+    assert entries_for(store, DatalogStatus.NEW) == []
+    sender = store.get_sender_record_by_address(ADDRESS_1)
+    assert sender.last_scanned_datalog_timestamp is None
+
+    reader.publish(ADDRESS_1, 1, TIMESTAMP_3, CID_3)
+    assert run(registry=registry_with_history(after)).new_events == 1
+    assert entries_for(open_store(env_settings), DatalogStatus.NEW) == [(CID_3, 1)]
+
+
+def test_history_from_as_a_date_means_midnight_utc() -> None:
+    from datetime import date
+
+    registry = registry_with_history(date(2026, 9, 11))
+    assert registry.senders[0].history_from == datetime(2026, 9, 11, tzinfo=UTC)
