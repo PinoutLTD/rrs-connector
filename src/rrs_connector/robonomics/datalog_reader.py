@@ -1,8 +1,12 @@
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 from robonomicsinterface import Account, Datalog
-from substrateinterface import SubstrateInterface
+
+from rrs_connector.robonomics.retry import with_retries
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -48,6 +52,8 @@ class DatalogReader:
         self,
         wss_endpoints: Sequence[str],
         request_timeout_seconds: int,
+        max_attempts: int = 1,
+        backoff_seconds: float = 0,
     ) -> None:
         self.wss_endpoints = list(wss_endpoints)
 
@@ -55,19 +61,67 @@ class DatalogReader:
             raise ValueError("At least one WSS endpoint is required")
 
         self.current_wss: str = self.wss_endpoints[0]
+        self.request_timeout_seconds = request_timeout_seconds
+        self.max_attempts = max_attempts
+        self.backoff_seconds = backoff_seconds
         # Reading chain state is public, so no keypair is needed here.
         self.datalog = Datalog(Account(remote_ws=self.current_wss))
         self._window_size: int | None = None
 
+    def _reconnect(self) -> None:
+        """Drop the connection and, with several endpoints, move to the next.
+
+        A node that just refused a connection is the least likely to answer the
+        retry, so the next attempt starts from another one when there is one.
+        """
+
+        if len(self.wss_endpoints) > 1:
+            following = self.wss_endpoints.index(self.current_wss) + 1
+            self.current_wss = self.wss_endpoints[following % len(self.wss_endpoints)]
+            LOGGER.info("Switching to the next node: %s", self.current_wss)
+        self.datalog = Datalog(Account(remote_ws=self.current_wss))
+        self._window_size = None
+
+    def _read(self, what: str, operation):
+        return with_retries(
+            operation,
+            what=what,
+            max_attempts=self.max_attempts,
+            backoff_seconds=self.backoff_seconds,
+            before_retry=self._reconnect,
+        )
+
+    def _interface(self):
+        """The library's own connection, opened on first use and reused.
+
+        Reading a constant used to open a second connection of our own, which
+        made the first chain access of a run the most fragile thing in it.
+        """
+
+        service = self.datalog._service_functions
+        if not service.interface:
+            # Any cheap call opens it; the library reuses it afterwards.
+            service.rpc_request("chain_getFinalizedHead", None)
+        if service.interface.websocket is not None:
+            # The library exposes no per-request timeout, so bound the socket
+            # instead: a hung read would otherwise hold the whole run.
+            service.interface.websocket.settimeout(self.request_timeout_seconds)
+        return service.interface
+
     def get_window_size(self) -> int:
         if self._window_size is None:
-            with SubstrateInterface(url=self.current_wss) as substrate:
-                constant = substrate.get_constant("Datalog", "WindowSize")
-                self._window_size = int(constant.value)
+            def read() -> int:
+                constant = self._interface().get_constant("Datalog", "WindowSize")
+                return int(constant.value)
+
+            self._window_size = self._read("Reading Datalog.WindowSize", read)
         return self._window_size
 
     def get_index_range(self, sender_address: str) -> DatalogIndexRange:
-        index_info = self.datalog.get_index(sender_address)
+        index_info = self._read(
+            f"Reading the datalog index of {sender_address}",
+            lambda: self.datalog.get_index(sender_address),
+        )
         start = int(index_info["start"])
         end = int(index_info["end"])
         return DatalogIndexRange(start, end)
@@ -75,10 +129,13 @@ class DatalogReader:
     def get_item(self, sender_address: str, datalog_index: int) -> DatalogRecord | None:
         # robonomicsinterface.get_item(index=0) treats 0 as "latest";
         # query storage directly so explicit datalog indices stay exact.
-        record = self.datalog._service_functions.chainstate_query(
-            "Datalog",
-            "DatalogItem",
-            [sender_address, datalog_index],
+        record = self._read(
+            f"Reading datalog #{datalog_index} of {sender_address}",
+            lambda: self.datalog._service_functions.chainstate_query(
+                "Datalog",
+                "DatalogItem",
+                [sender_address, datalog_index],
+            ),
         )
 
         if record is None:

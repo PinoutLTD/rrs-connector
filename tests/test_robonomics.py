@@ -72,6 +72,8 @@ def make_datalog_reader(fake_datalog: FakeDatalog) -> DatalogReader:
     reader = DatalogReader.__new__(DatalogReader)
     reader.datalog = fake_datalog
     reader._window_size = WINDOW_SIZE
+    reader.max_attempts = 1
+    reader.backoff_seconds = 0
     return reader
 
 
@@ -249,3 +251,50 @@ def test_list_new_records_skips_empty_items() -> None:
 def test_datalog_reader_raises_for_empty_wss_endpoints() -> None:
     with pytest.raises(ValueError, match="At least one WSS endpoint is required"):
         DatalogReader(wss_endpoints=[], request_timeout_seconds=60)
+
+
+class FlakyDatalog(FakeDatalog):
+    """Fails the first `failures` index reads the way a dropped socket does."""
+
+    def __init__(self, failures: int) -> None:
+        super().__init__()
+        self.failures = failures
+        self.index_calls = 0
+
+    def get_index(self, sender_address: str) -> dict[str, int]:
+        self.index_calls += 1
+        if self.index_calls <= self.failures:
+            raise ConnectionResetError("connection reset by peer")
+        return super().get_index(sender_address)
+
+
+def test_a_dropped_connection_is_retried_and_the_reader_reconnects(monkeypatch):
+    reader = make_datalog_reader(FlakyDatalog(failures=1))
+    reader.max_attempts = 3
+    reader.backoff_seconds = 0
+    reconnects = []
+    monkeypatch.setattr(reader, "_reconnect", lambda: reconnects.append(1))
+    monkeypatch.setattr("rrs_connector.robonomics.retry.time.sleep", lambda _: None)
+
+    assert reader.get_index_range(ADDRESS_1) == DatalogIndexRange(0, 3)
+    assert len(reconnects) == 1
+
+
+def test_the_reader_moves_to_the_next_node_when_there_is_one(monkeypatch):
+    built = []
+    monkeypatch.setattr(
+        "rrs_connector.robonomics.datalog_reader.Datalog",
+        lambda account: built.append(account) or FakeDatalog(),
+    )
+    monkeypatch.setattr(
+        "rrs_connector.robonomics.datalog_reader.Account", lambda remote_ws: remote_ws
+    )
+    reader = DatalogReader(
+        wss_endpoints=["wss://first/", "wss://second/"], request_timeout_seconds=15
+    )
+
+    reader._reconnect()
+    assert reader.current_wss == "wss://second/"
+    reader._reconnect()
+    assert reader.current_wss == "wss://first/"  # back to the first, round robin
+    assert built == ["wss://first/", "wss://second/", "wss://first/"]
