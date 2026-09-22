@@ -415,6 +415,8 @@ def create_datalog_reader(network_config: NetworkConfig) -> DatalogReader:
     return DatalogReader(
         wss_endpoints=[str(endpoint) for endpoint in endpoints],
         request_timeout_seconds=network_config.timeouts.datalog_request_seconds,
+        max_attempts=network_config.retries.datalog_request_max_attempts,
+        backoff_seconds=network_config.retries.retry_backoff_seconds,
     )
 
 
