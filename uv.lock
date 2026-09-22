@@ -754,11 +754,13 @@ source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "pynacl" },
     { name = "pyyaml" },
     { name = "requests" },
     { name = "robonomics-interface" },
     { name = "sqlalchemy" },
     { name = "substrate-interface" },
+    { name = "websocket-client" },
 ]
 
 [package.optional-dependencies]
@@ -771,6 +773,7 @@ dev = [
 requires-dist = [
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
+    { name = "pynacl", specifier = ">=1.6.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.2" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "requests", specifier = ">=2.33" },
@@ -778,6 +781,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15.8" },
     { name = "sqlalchemy", specifier = ">=2.0.49" },
     { name = "substrate-interface", specifier = ">=1.8.1" },
+    { name = "websocket-client", specifier = ">=1.9.0" },
 ]
 provides-extras = ["dev"]
 
