@@ -16,11 +16,15 @@ authors = [
 dependencies = [
     "pydantic>=2.12.5",
     "pydantic-settings>=2.13.1",
+    # Report files are NaCl secret boxes; decryptor.py opens them directly.
+    "pynacl>=1.6.2",
     "pyyaml>=6.0.3",
     "requests>=2.33",
     "robonomics-interface>=2.0.0",
     "sqlalchemy>=2.0.49",
     "substrate-interface>=1.8.1",
+    # retry.py catches its exception to tell a dropped socket from a data error.
+    "websocket-client>=1.9.0",
 ]
 
 [project.scripts]
