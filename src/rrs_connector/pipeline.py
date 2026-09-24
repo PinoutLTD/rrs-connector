@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
-from robonomicsinterface import Account
+from robonomicsinterface import Keypair
 
 from rrs_connector.config import (
     EnvSettings,
@@ -29,7 +29,11 @@ from rrs_connector.reports.manifest import (
 from rrs_connector.reports.permissions import PRIVATE, ArtifactModes, artifact_modes
 from rrs_connector.reports.recipients import RecipientKeys
 from rrs_connector.reports.retention import apply_retention
-from rrs_connector.robonomics.datalog_reader import DatalogReader, DatalogScan
+from rrs_connector.robonomics.datalog_reader import (
+    GENESIS_HASHES,
+    DatalogReader,
+    DatalogScan,
+)
 from rrs_connector.state.db import (
     create_db_engine,
     create_session_factory,
@@ -57,7 +61,7 @@ ARCHIVE_FILE_NAME = "archive.zip"
 DECRYPTED_DIR_NAME = "decrypted"
 
 # Loads the key for one recipient address; raises when it cannot.
-AccountLoader = Callable[[str], Account]
+AccountLoader = Callable[[str], Keypair]
 
 
 class RecipientKeyUnavailable(RuntimeError):
@@ -417,6 +421,7 @@ def create_datalog_reader(network_config: NetworkConfig) -> DatalogReader:
         request_timeout_seconds=network_config.timeouts.datalog_request_seconds,
         max_attempts=network_config.retries.datalog_request_max_attempts,
         backoff_seconds=network_config.retries.retry_backoff_seconds,
+        genesis_hash=GENESIS_HASHES[network_config.network],
     )
 
 
@@ -437,8 +442,10 @@ def run_once(
     store = StateStore(session_factory)
     store.sync_senders(sender_registry.senders)
 
+    # A reader made here holds a connection; one passed in is the caller's.
+    owned_reader = None
     if reader is None:
-        reader = create_datalog_reader(network_config)
+        reader = owned_reader = create_datalog_reader(network_config)
 
     sender_records = store.get_enabled_sender_records()
     result = RunOnceResult(
@@ -448,34 +455,39 @@ def run_once(
         skipped=len(sender_registry.senders) - len(sender_records),
     )
 
-    history_from = {s.client_id: s.history_from for s in sender_registry.senders}
-    for sender in sender_records:
-        try:
-            sender_result = collect_sender_events(
-                store, reader, sender, history_from.get(sender.client_id)
-            )
-        except Exception:
-            LOGGER.exception(
-                "Error during processing sender %s (%s)",
-                sender.client_id,
-                sender.robonomics_address,
-            )
-            result.failed += 1
-            continue
+    try:
+        history_from = {s.client_id: s.history_from for s in sender_registry.senders}
+        for sender in sender_records:
+            try:
+                sender_result = collect_sender_events(
+                    store, reader, sender, history_from.get(sender.client_id)
+                )
+            except Exception:
+                LOGGER.exception(
+                    "Error during processing sender %s (%s)",
+                    sender.client_id,
+                    sender.robonomics_address,
+                )
+                result.failed += 1
+                continue
 
-        result.processed += 1
-        result.new_events += sender_result.new
-        result.ignored_events += sender_result.ignored
-        result.known_events += sender_result.known
-        result.senders_with_gaps += int(sender_result.gap)
-        LOGGER.info(
-            "Sender %s: new=%d ignored=%d already_known=%d%s",
-            sender.client_id,
-            sender_result.new,
-            sender_result.ignored,
-            sender_result.known,
-            " gap=yes" if sender_result.gap else "",
-        )
+            result.processed += 1
+            result.new_events += sender_result.new
+            result.ignored_events += sender_result.ignored
+            result.known_events += sender_result.known
+            result.senders_with_gaps += int(sender_result.gap)
+            LOGGER.info(
+                "Sender %s: new=%d ignored=%d already_known=%d%s",
+                sender.client_id,
+                sender_result.new,
+                sender_result.ignored,
+                sender_result.known,
+                " gap=yes" if sender_result.gap else "",
+            )
+    finally:
+        # The chain is read only above; close before the slow report downloads.
+        if owned_reader is not None:
+            owned_reader.close()
 
     report_result = process_reports(
         store,

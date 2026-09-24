@@ -117,8 +117,13 @@ def fetch(
     if cids:
         requested = [RequestedReport(cid, safe_path_part(cid)) for cid in cids]
     else:
-        reader = reader or create_datalog_reader(network_config)
-        requested = requested_from_datalog(reader, sender_address, last or 1)
+        if reader is not None:
+            requested = requested_from_datalog(reader, sender_address, last or 1)
+        else:
+            with create_datalog_reader(network_config) as own_reader:
+                requested = requested_from_datalog(
+                    own_reader, sender_address, last or 1
+                )
 
     if not requested:
         LOGGER.warning("Nothing to fetch for %s", sender_address)

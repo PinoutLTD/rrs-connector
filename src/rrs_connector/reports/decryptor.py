@@ -6,15 +6,17 @@ encrypted files with random names, whose original names are carried in the
 encrypted metadata.
 """
 
-import json
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from zipfile import BadZipFile, ZipFile, ZipInfo
 
-from nacl.secret import SecretBox
-from robonomicsinterface import Account
-from substrateinterface import Keypair, KeypairType
+from robonomicsinterface import (
+    EnvelopeError,
+    Keypair,
+    decrypt_package,
+    parse_decrypted,
+)
 
 from rrs_connector.reports.permissions import PRIVATE, ArtifactModes
 
@@ -34,69 +36,17 @@ class DecryptedFile:
     size: int
 
 
-def decrypt_msg(
-    encrypted_msg: str,
-    sender_public_key: bytes,
-    recipient_keypair: Keypair,
-) -> bytes:
-    if encrypted_msg[:2] == "0x":
-        encrypted_msg = encrypted_msg[2:]
-    return recipient_keypair.decrypt_message(
-        bytes.fromhex(encrypted_msg), sender_public_key
-    )
-
-
 def multi_envelope_decrypt_data(
     encryption_package: str,
-    recipient_account: Account,
+    recipient_account: Keypair,
     sender_address: str,
 ) -> str:
     """Unwrap the symmetric key for the recipient, then decrypt the data."""
 
     try:
-        package = json.loads(encryption_package)
-        encrypted_keys = package["keys"]
-        encrypted_data_hex = package["data"]
-    except (json.JSONDecodeError, TypeError, KeyError) as e:
-        raise ReportDecryptionError("invalid encryption package") from e
-
-    if not isinstance(encrypted_keys, dict) or not isinstance(encrypted_data_hex, str):
-        raise ReportDecryptionError("invalid encryption package structure")
-
-    encrypted_key = encrypted_keys.get(recipient_account.get_address())
-    if not encrypted_key:
-        raise ReportDecryptionError("package is not encrypted for this recipient")
-
-    try:
-        sender_keypair = Keypair(
-            ss58_address=sender_address, crypto_type=KeypairType.ED25519
-        )
-        secret_key = decrypt_msg(
-            encrypted_key, sender_keypair.public_key, recipient_account.keypair
-        )
-    except Exception as e:
-        raise ReportDecryptionError("cannot unwrap the secret key") from e
-
-    try:
-        if encrypted_data_hex[:2] == "0x":
-            encrypted_data_hex = encrypted_data_hex[2:]
-        data = SecretBox(secret_key).decrypt(bytes.fromhex(encrypted_data_hex))
-        return data.decode("utf-8")
-    except Exception as e:
-        raise ReportDecryptionError("cannot decrypt the payload") from e
-
-
-def parse_decrypted(text: str) -> tuple[str, dict | None]:
-    """Split `{"payload": ..., "meta": ...}` or return plain data without meta."""
-
-    try:
-        obj = json.loads(text)
-    except json.JSONDecodeError:
-        return text, None
-    if isinstance(obj, dict) and "payload" in obj:
-        meta = obj.get("meta")
-        return obj["payload"], meta if isinstance(meta, dict) else None
-    return text, None
+        return decrypt_package(encryption_package, recipient_account, sender_address)
+    except EnvelopeError as e:
+        raise ReportDecryptionError(str(e)) from e
 
 
 def output_file_name(meta: dict | None, member_name: str) -> str:
@@ -119,7 +69,7 @@ def validate_member(info: ZipInfo) -> None:
 def decrypt_archive(
     archive_path: Path,
     output_dir: Path,
-    recipient_account: Account,
+    recipient_account: Keypair,
     sender_address: str,
     modes: ArtifactModes = PRIVATE,
 ) -> list[DecryptedFile]:
@@ -155,7 +105,7 @@ def decrypt_archive(
 def _decrypt_members(
     archive_path: Path,
     staging_dir: Path,
-    recipient_account: Account,
+    recipient_account: Keypair,
     sender_address: str,
     modes: ArtifactModes,
 ) -> list[DecryptedFile]:

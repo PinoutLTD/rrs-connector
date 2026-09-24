@@ -5,8 +5,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
-from robonomicsinterface import Account
-from substrateinterface import Keypair, KeypairType
+from robonomicsinterface import Keypair, generate_mnemonic
 
 from rrs_connector.reports import decryptor
 from rrs_connector.reports.decryptor import (
@@ -20,8 +19,8 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def stranger_account() -> Account:
-    return Account(Keypair.generate_mnemonic(), crypto_type=KeypairType.ED25519)
+def stranger_account() -> Keypair:
+    return Keypair.from_mnemonic(generate_mnemonic())
 
 
 def make_zip(path: Path, members: dict[str, str]) -> Path:
@@ -57,7 +56,7 @@ def test_rejects_package_not_encrypted_for_recipient(
 ) -> None:
     output_dir = tmp_path / "decrypted"
 
-    with pytest.raises(ReportDecryptionError, match="not encrypted for this recipient"):
+    with pytest.raises(ReportDecryptionError, match="not addressed to"):
         decrypt_archive(
             ha_report_archive, output_dir, stranger_account(), sender_address
         )
@@ -69,7 +68,7 @@ def test_rejects_package_not_encrypted_for_recipient(
 def test_rejects_wrong_sender_address(
     tmp_path, ha_report_archive, recipient_account
 ) -> None:
-    wrong_sender = stranger_account().get_address()
+    wrong_sender = stranger_account().address
 
     with pytest.raises(ReportDecryptionError, match="cannot unwrap the secret key"):
         decrypt_archive(
@@ -131,7 +130,7 @@ def test_rejects_invalid_package(tmp_path, recipient_account, sender_address) ->
     archive = make_zip(tmp_path / "bad.zip", {"a.enc": "not json"})
 
     with pytest.raises(
-        ReportDecryptionError, match="a.enc: invalid encryption package"
+        ReportDecryptionError, match="a.enc: not an encryption package"
     ):
         decrypt_archive(archive, tmp_path / "out", recipient_account, sender_address)
 

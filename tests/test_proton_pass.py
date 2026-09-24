@@ -85,7 +85,7 @@ def test_load_integrator_account_reads_item_by_address(monkeypatch, ha_report) -
 
     account = load_integrator_account(ha_report["recipient_address"], "Report Service")
 
-    assert account.get_address() == ha_report["recipient_address"]
+    assert account.address == ha_report["recipient_address"]
     assert f"Robonomics - {ha_report['recipient_address']}" in fake.calls[0][0]
 
 

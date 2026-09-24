@@ -12,7 +12,7 @@ import json
 import logging
 from dataclasses import dataclass
 
-from substrateinterface import Keypair, KeypairType
+from robonomicsinterface import Keypair, generate_mnemonic
 
 from rrs_connector.proton_pass import (
     ROBONOMICS_ITEM_PREFIX,
@@ -24,7 +24,6 @@ from rrs_connector.proton_pass import (
 
 LOGGER = logging.getLogger(__name__)
 
-ROBONOMICS_SS58_FORMAT = 32
 ADDRESS_FIELD = "address"
 SECTION_NAME = "Robonomics"
 REASON = "Create a Robonomics recipient key for Report Service"
@@ -68,11 +67,8 @@ def custom_item(template: dict, title: str, seed: str, address: str) -> dict:
 
 
 def create_recipient_key(vault: str) -> NewKey:
-    mnemonic = Keypair.generate_mnemonic()
-    keypair = Keypair.create_from_mnemonic(
-        mnemonic, crypto_type=KeypairType.ED25519, ss58_format=ROBONOMICS_SS58_FORMAT
-    )
-    address = keypair.ss58_address
+    mnemonic = generate_mnemonic()
+    address = Keypair.from_mnemonic(mnemonic).address
     title = item_title(address)
 
     template_result = run_pass_cli(
@@ -115,11 +111,7 @@ def create_recipient_key(vault: str) -> NewKey:
         stored = read_pass_field(vault, title, SEED_FIELD, reason=REASON)
     except SecretUnavailableError as e:
         raise KeygenError(f"the item was created but cannot be read back: {e}") from e
-    derived = Keypair.create_from_mnemonic(
-        stored.get_secret_value(),
-        crypto_type=KeypairType.ED25519,
-        ss58_format=ROBONOMICS_SS58_FORMAT,
-    ).ss58_address
+    derived = Keypair.from_mnemonic(stored.get_secret_value()).address
     if derived != address:
         raise KeygenError(
             f"the stored seed derives {derived}, not {address}; do not use this item"

@@ -45,7 +45,7 @@ def new_key():
 
 class CountingLoader:
     def __init__(self, *accounts) -> None:
-        self.accounts = {account.get_address(): account for account in accounts}
+        self.accounts = {account.address: account for account in accounts}
         self.loaded: list[str] = []
 
     def __call__(self, address: str):
@@ -55,38 +55,38 @@ class CountingLoader:
 
 def test_envelope_names_its_recipients(tmp_path, site, new_key) -> None:
     archive = build_report_archive(
-        tmp_path / "a.zip", site, [new_key.get_address()], FILES
+        tmp_path / "a.zip", site, [new_key.address], FILES
     )
 
     assert archive_recipients(archive) == {
-        site.get_address(),
-        new_key.get_address(),
+        site.address,
+        new_key.address,
     }
 
 
 def test_the_key_the_report_needs_is_chosen(tmp_path, site, old_key, new_key) -> None:
     archive = build_report_archive(
-        tmp_path / "a.zip", site, [new_key.get_address()], FILES
+        tmp_path / "a.zip", site, [new_key.address], FILES
     )
     keys = RecipientKeys(
-        [old_key.get_address(), new_key.get_address()], CountingLoader()
+        [old_key.address, new_key.address], CountingLoader()
     )
 
-    assert keys.choose(archive) == new_key.get_address()
+    assert keys.choose(archive) == new_key.address
 
 
 def test_configuration_order_breaks_a_tie(tmp_path, site, old_key, new_key) -> None:
     archive = build_report_archive(
         tmp_path / "a.zip",
         site,
-        [old_key.get_address(), new_key.get_address()],
+        [old_key.address, new_key.address],
         FILES,
     )
     keys = RecipientKeys(
-        [new_key.get_address(), old_key.get_address()], CountingLoader()
+        [new_key.address, old_key.address], CountingLoader()
     )
 
-    assert keys.choose(archive) == new_key.get_address()
+    assert keys.choose(archive) == new_key.address
 
 
 def test_report_for_a_stranger_names_who_it_was_for(
@@ -94,25 +94,25 @@ def test_report_for_a_stranger_names_who_it_was_for(
 ) -> None:
     stranger = ed25519_account()
     archive = build_report_archive(
-        tmp_path / "a.zip", site, [stranger.get_address()], FILES
+        tmp_path / "a.zip", site, [stranger.address], FILES
     )
-    keys = RecipientKeys([old_key.get_address()], CountingLoader())
+    keys = RecipientKeys([old_key.address], CountingLoader())
 
-    with pytest.raises(NotAddressedToUsError, match=stranger.get_address()):
+    with pytest.raises(NotAddressedToUsError, match=stranger.address):
         keys.choose(archive)
 
 
 def test_keys_are_loaded_once_and_only_our_own(old_key, new_key) -> None:
     loader = CountingLoader(old_key, new_key)
-    keys = RecipientKeys([old_key.get_address()], loader)
+    keys = RecipientKeys([old_key.address], loader)
 
-    keys.account(old_key.get_address())
-    keys.account(old_key.get_address())
+    keys.account(old_key.address)
+    keys.account(old_key.address)
 
-    assert loader.loaded == [old_key.get_address()]
+    assert loader.loaded == [old_key.address]
     # An address from an envelope never reaches Proton Pass unless we configured it.
     with pytest.raises(ValueError, match="not a configured recipient"):
-        keys.account(new_key.get_address())
+        keys.account(new_key.address)
 
 
 # Through the pipeline
@@ -132,12 +132,12 @@ def run_with_keys(
 ):
     from rrs_connector.pipeline import run_once
 
-    reader.publish(site.get_address(), 0, TIMESTAMP_1, CID_1)
+    reader.publish(site.address, 0, TIMESTAMP_1, CID_1)
     settings = env_settings.model_copy(update={"integrator_addresses": addresses})
     return run_once(
         settings,
         network_config,
-        registry_for(("home", site.get_address())),
+        registry_for(("home", site.address)),
         reader,
         load_account=loader,
         download=ArchiveServer(archive),
@@ -148,7 +148,7 @@ def test_report_for_the_new_key_is_processed_without_touching_the_old(
     env_settings, network_config, reader, tmp_path, site, old_key, new_key
 ) -> None:
     archive = build_report_archive(
-        tmp_path / "a.zip", site, [new_key.get_address()], FILES
+        tmp_path / "a.zip", site, [new_key.address], FILES
     )
     loader = CountingLoader(old_key, new_key)
 
@@ -159,11 +159,11 @@ def test_report_for_the_new_key_is_processed_without_touching_the_old(
         site,
         archive,
         loader,
-        [old_key.get_address(), new_key.get_address()],
+        [old_key.address, new_key.address],
     )
 
     assert result.reports_processed == 1
-    assert loader.loaded == [new_key.get_address()]
+    assert loader.loaded == [new_key.address]
 
 
 def test_report_for_nobody_we_know_fails_without_loading_a_key(
@@ -171,7 +171,7 @@ def test_report_for_nobody_we_know_fails_without_loading_a_key(
 ) -> None:
     stranger = ed25519_account()
     archive = build_report_archive(
-        tmp_path / "a.zip", site, [stranger.get_address()], FILES
+        tmp_path / "a.zip", site, [stranger.address], FILES
     )
     loader = CountingLoader(old_key)
 
@@ -182,7 +182,7 @@ def test_report_for_nobody_we_know_fails_without_loading_a_key(
         site,
         archive,
         loader,
-        [old_key.get_address()],
+        [old_key.address],
     )
 
     entry = only_entry(open_store(env_settings))
@@ -212,30 +212,39 @@ def test_addresses_come_from_a_comma_separated_list(
 ) -> None:
     monkeypatch.setenv(
         "RRS_INTEGRATOR_ADDRESSES",
-        f"{old_key.get_address()}, {new_key.get_address()}",
+        f"{old_key.address}, {new_key.address}",
     )
 
     assert settings_with(tmp_path).integrator_addresses == [
-        old_key.get_address(),
-        new_key.get_address(),
+        old_key.address,
+        new_key.address,
     ]
 
 
 def test_the_single_address_setting_still_works(tmp_path, old_key, new_key) -> None:
     settings = settings_with(
         tmp_path,
-        integrator_addresses=[new_key.get_address()],
-        integrator_address=old_key.get_address(),
+        integrator_addresses=[new_key.address],
+        integrator_address=old_key.address,
     )
 
     assert settings.integrator_addresses == [
-        new_key.get_address(),
-        old_key.get_address(),
+        new_key.address,
+        old_key.address,
     ]
 
 
 def test_at_least_one_valid_address_is_required(tmp_path) -> None:
     with pytest.raises(ValidationError, match="no recipient key"):
         settings_with(tmp_path)
-    with pytest.raises(ValidationError, match="not a valid SS58"):
+    with pytest.raises(ValidationError, match="not a valid Robonomics address"):
         settings_with(tmp_path, integrator_addresses=["not-an-address"])
+
+
+def test_an_address_of_another_network_is_refused(tmp_path) -> None:
+    # The well-known development account Alice in the generic Substrate format:
+    # a valid address, but a report can never be encrypted for it here.
+    alice = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+
+    with pytest.raises(ValidationError, match="not a valid Robonomics address"):
+        settings_with(tmp_path, integrator_addresses=[alice])

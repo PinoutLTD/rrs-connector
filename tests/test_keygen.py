@@ -4,9 +4,9 @@ import json
 import subprocess
 
 import pytest
-from substrateinterface import Keypair, KeypairType
+from robonomicsinterface import Keypair, address_format
 
-from rrs_connector import keygen, proton_pass
+from rrs_connector import proton_pass
 from rrs_connector.keygen import KeygenError, create_recipient_key, custom_item
 
 TEMPLATE = {"title": "", "note": "", "sections": []}
@@ -60,9 +60,7 @@ def test_key_is_created_and_verified(vault, capsys) -> None:
 
     item = vault.items[key.item_title]
     fields = {f["field_name"]: f for f in item["sections"][0]["fields"]}
-    derived = Keypair.create_from_mnemonic(
-        fields["seed"]["value"], crypto_type=KeypairType.ED25519, ss58_format=32
-    ).ss58_address
+    derived = Keypair.from_mnemonic(fields["seed"]["value"]).address
 
     assert key.item_title == f"Robonomics - {key.address}"
     assert derived == key.address
@@ -106,4 +104,4 @@ def test_generated_keys_are_ed25519_robonomics_addresses(vault) -> None:
     key = create_recipient_key("Report Service")
 
     assert key.address.startswith("4")
-    assert keygen.ROBONOMICS_SS58_FORMAT == 32
+    assert address_format(key.address) == 32
