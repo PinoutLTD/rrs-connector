@@ -121,10 +121,14 @@ The code is divided into layers with explicit responsibility boundaries:
   key is only needed later for decryption.
 - A payload that is a plain CID (CIDv0 `Qm…` or base32 CIDv1 `b…`) becomes a
   `NEW` report event; anything else is stored as `IGNORED` with its raw payload.
-- Due to the behavior of the current `robonomics-interface` version, where the
-  public `get_item(index=0)` returns the latest item, index `0` is read through
-  a direct chain-storage request using the internal service API. This dependency
-  must be rechecked when upgrading the library.
+- A sender's datalog is read in one request per run: every live record of the
+  ring buffer (at most 127 of 512 bytes), oldest first, and the cursor is
+  applied locally. Records that are not UTF-8 text are skipped: sites publish
+  a CID or a heartbeat's JSON.
+- Network failures (`TransportError` from `robonomics-interface`) are retried
+  with a pause, `datalog_request_max_attempts` times; an error the node answers
+  with is not. Every node the reader connects to must have the genesis of the
+  configured `network`.
 
 ### Processing states
 
@@ -312,7 +316,7 @@ version.
 
 The project requires Python `>=3.13,<4.0`. The build uses Hatchling; the main
 libraries are Pydantic v2, pydantic-settings, PyYAML, SQLAlchemy,
-`robonomics-interface`, and `substrate-interface`.
+and `robonomics-interface` 3.
 
 Environment variables (usually in a local `.env` file):
 

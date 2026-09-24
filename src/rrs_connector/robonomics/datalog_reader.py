@@ -1,12 +1,23 @@
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Protocol
 
-from robonomicsinterface import Account, Datalog
+from robonomicsinterface import ROBONOMICS_GENESIS_HASH, DatalogItem, RobonomicsSync
 
 from rrs_connector.robonomics.retry import with_retries
 
 LOGGER = logging.getLogger(__name__)
+
+# The library checks the genesis of every node it connects to and knows only
+# Robonomics on Polkadot; Kusama is ours to name.
+ROBONOMICS_KUSAMA_GENESIS_HASH = (
+    "0x631ccc82a078481584041656af292834e1ae6daab61d2875b4dd0c14bb9b17bc"
+)
+GENESIS_HASHES = {
+    "polkadot": ROBONOMICS_GENESIS_HASH,
+    "kusama": ROBONOMICS_KUSAMA_GENESIS_HASH,
+}
 
 
 @dataclass(frozen=True)
@@ -15,12 +26,6 @@ class DatalogRecord:
     datalog_index: int
     timestamp_ms: int
     payload: str
-
-
-@dataclass(frozen=True)
-class DatalogIndexRange:
-    start: int
-    end: int
 
 
 @dataclass(frozen=True)
@@ -36,122 +41,88 @@ class DatalogScan:
     reached_cursor: bool
 
 
-def ring_buffer_indices(index_range: DatalogIndexRange, window_size: int) -> list[int]:
-    """Datalog slots from oldest to newest.
+class DatalogItems(Protocol):
+    def items(self, address: str) -> list[DatalogItem]: ...
 
-    The datalog pallet keeps the last `window_size - 1` records per account and
-    reuses slots once full, so `end < start` means the buffer has wrapped.
+
+class DatalogClient(Protocol):
+    """The part of `RobonomicsSync` the reader uses."""
+
+    datalog: DatalogItems
+
+    def close(self) -> None: ...
+
+
+def as_record(sender_address: str, item: DatalogItem) -> DatalogRecord | None:
+    """A datalog item as our record, or None if it cannot be one of ours.
+
+    Sites publish text — a CID or a heartbeat's JSON — so a record that is not
+    UTF-8, is empty or has no timestamp was not written by the integration.
     """
-    start, end = index_range.start, index_range.end
-    count = end - start if start <= end else window_size + end - start
-    return [(start + offset) % window_size for offset in range(count)]
+
+    payload = item.text
+    if item.timestamp_ms == 0 or not payload:
+        LOGGER.debug(
+            "Skipping datalog #%d of %s: not a text record", item.index, sender_address
+        )
+        return None
+    return DatalogRecord(sender_address, item.index, item.timestamp_ms, payload)
 
 
 class DatalogReader:
+    """Reads a site's datalog: every live record in one request per site.
+
+    The ring buffer holds at most 127 records of at most 512 bytes, so reading
+    all of them at once costs less than walking the slots one by one, and the
+    cursor is applied here rather than on the chain.
+    """
+
     def __init__(
         self,
         wss_endpoints: Sequence[str],
         request_timeout_seconds: int,
         max_attempts: int = 1,
         backoff_seconds: float = 0,
+        genesis_hash: str | None = ROBONOMICS_GENESIS_HASH,
+        client: DatalogClient | None = None,
     ) -> None:
-        self.wss_endpoints = list(wss_endpoints)
-
-        if not self.wss_endpoints:
+        if not wss_endpoints:
             raise ValueError("At least one WSS endpoint is required")
 
-        self.current_wss: str = self.wss_endpoints[0]
-        self.request_timeout_seconds = request_timeout_seconds
         self.max_attempts = max_attempts
         self.backoff_seconds = backoff_seconds
-        # Reading chain state is public, so no keypair is needed here.
-        self.datalog = Datalog(Account(remote_ws=self.current_wss))
-        self._window_size: int | None = None
+        # Reading chain state is public, so no keypair is needed here. The
+        # library does not retry on its own (retries=0): `with_retries` repeats
+        # a failed read after a pause, and each attempt connects to the first
+        # endpoint that answers — which is what a failed TLS handshake on the
+        # first connection of a run needs.
+        self.client: DatalogClient = client or RobonomicsSync(
+            list(wss_endpoints),
+            timeout=request_timeout_seconds,
+            retries=0,
+            genesis_hash=genesis_hash,
+        )
 
-    def _reconnect(self) -> None:
-        """Drop the connection and, with several endpoints, move to the next.
+    def close(self) -> None:
+        self.client.close()
 
-        A node that just refused a connection is the least likely to answer the
-        retry, so the next attempt starts from another one when there is one.
-        """
+    def __enter__(self) -> "DatalogReader":
+        return self
 
-        if len(self.wss_endpoints) > 1:
-            following = self.wss_endpoints.index(self.current_wss) + 1
-            self.current_wss = self.wss_endpoints[following % len(self.wss_endpoints)]
-            LOGGER.info("Switching to the next node: %s", self.current_wss)
-        self.datalog = Datalog(Account(remote_ws=self.current_wss))
-        self._window_size = None
+    def __exit__(self, *_: object) -> None:
+        self.close()
 
-    def _read(self, what: str, operation):
-        return with_retries(
-            operation,
-            what=what,
+    def read_records(self, sender_address: str) -> list[DatalogRecord]:
+        """Every live record of the site, oldest first."""
+
+        items = with_retries(
+            lambda: self.client.datalog.items(sender_address),
+            what=f"Reading the datalog of {sender_address}",
             max_attempts=self.max_attempts,
             backoff_seconds=self.backoff_seconds,
-            before_retry=self._reconnect,
         )
-
-    def _interface(self):
-        """The library's own connection, opened on first use and reused.
-
-        Reading a constant used to open a second connection of our own, which
-        made the first chain access of a run the most fragile thing in it.
-        """
-
-        service = self.datalog._service_functions
-        if not service.interface:
-            # Any cheap call opens it; the library reuses it afterwards.
-            service.rpc_request("chain_getFinalizedHead", None)
-        if service.interface.websocket is not None:
-            # The library exposes no per-request timeout, so bound the socket
-            # instead: a hung read would otherwise hold the whole run.
-            service.interface.websocket.settimeout(self.request_timeout_seconds)
-        return service.interface
-
-    def get_window_size(self) -> int:
-        if self._window_size is None:
-            def read() -> int:
-                constant = self._interface().get_constant("Datalog", "WindowSize")
-                return int(constant.value)
-
-            self._window_size = self._read("Reading Datalog.WindowSize", read)
-        return self._window_size
-
-    def get_index_range(self, sender_address: str) -> DatalogIndexRange:
-        index_info = self._read(
-            f"Reading the datalog index of {sender_address}",
-            lambda: self.datalog.get_index(sender_address),
-        )
-        start = int(index_info["start"])
-        end = int(index_info["end"])
-        return DatalogIndexRange(start, end)
-
-    def get_item(self, sender_address: str, datalog_index: int) -> DatalogRecord | None:
-        # robonomicsinterface.get_item(index=0) treats 0 as "latest";
-        # query storage directly so explicit datalog indices stay exact.
-        record = self._read(
-            f"Reading datalog #{datalog_index} of {sender_address}",
-            lambda: self.datalog._service_functions.chainstate_query(
-                "Datalog",
-                "DatalogItem",
-                [sender_address, datalog_index],
-            ),
-        )
-
-        if record is None:
-            return None
-
-        timestamp, datalog_content = record
-
-        if timestamp == 0 or datalog_content is None:
-            return None
-
-        return DatalogRecord(
-            sender_address,
-            datalog_index,
-            int(timestamp),
-            payload=str(datalog_content),
-        )
+        records = (as_record(sender_address, item) for item in items)
+        return [record for record in records if record is not None]
 
     def list_last_records(self, sender_address: str, count: int) -> list[DatalogRecord]:
         """The newest `count` records still held by the ring, oldest first."""
@@ -159,19 +130,7 @@ class DatalogReader:
         if count < 1:
             raise ValueError("count must be at least 1")
 
-        indices = ring_buffer_indices(
-            self.get_index_range(sender_address), self.get_window_size()
-        )
-        newest_first: list[DatalogRecord] = []
-
-        for index in reversed(indices):
-            record = self.get_item(sender_address, index)
-            if record is not None:
-                newest_first.append(record)
-            if len(newest_first) == count:
-                break
-
-        return list(reversed(newest_first))
+        return self.read_records(sender_address)[-count:]
 
     def list_new_records(
         self,
@@ -184,33 +143,13 @@ class DatalogReader:
         cursor timestamp itself are included, so callers must store them
         idempotently; this keeps records published in the same block safe.
         """
-        indices = ring_buffer_indices(
-            self.get_index_range(sender_address), self.get_window_size()
-        )
+        records = self.read_records(sender_address)
 
-        if not indices:
-            return DatalogScan(records=[], reached_cursor=True)
+        if cursor_timestamp_ms is None or not records:
+            return DatalogScan(records=records[-1:], reached_cursor=True)
 
-        if cursor_timestamp_ms is None:
-            for index in reversed(indices):
-                record = self.get_item(sender_address, index)
-                if record is not None:
-                    return DatalogScan(records=[record], reached_cursor=True)
-            return DatalogScan(records=[], reached_cursor=True)
-
-        newest_first: list[DatalogRecord] = []
-        reached_cursor = False
-
-        for index in reversed(indices):
-            record = self.get_item(sender_address, index)
-            if record is None:
-                continue
-            if record.timestamp_ms <= cursor_timestamp_ms:
-                reached_cursor = True
-            if record.timestamp_ms < cursor_timestamp_ms:
-                break
-            newest_first.append(record)
-
-        return DatalogScan(
-            records=list(reversed(newest_first)), reached_cursor=reached_cursor
-        )
+        new = [r for r in records if r.timestamp_ms >= cursor_timestamp_ms]
+        # Records are written in time order, so the oldest one decides whether
+        # anything at or before the cursor is still held.
+        reached_cursor = records[0].timestamp_ms <= cursor_timestamp_ms
+        return DatalogScan(records=new, reached_cursor=reached_cursor)

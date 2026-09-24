@@ -2,8 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
-from robonomicsinterface import Account
-from substrateinterface import KeypairType
+from robonomicsinterface import Keypair, encrypt_for_recipients, generate_mnemonic
 
 from rrs_connector.config import EnvSettings, NetworkConfig
 
@@ -24,8 +23,8 @@ def ha_report_archive() -> Path:
 
 
 @pytest.fixture(scope="session")
-def recipient_account() -> Account:
-    return Account(HA_REPORT["recipient_seed"], crypto_type=KeypairType.ED25519)
+def recipient_account() -> Keypair:
+    return Keypair.from_secret(HA_REPORT["recipient_seed"])
 
 
 @pytest.fixture(scope="session")
@@ -68,7 +67,7 @@ def network_config() -> NetworkConfig:
 
 def build_report_archive(
     path: Path,
-    sender: Account,
+    sender: Keypair,
     recipient_addresses: list[str],
     files: dict[str, str],
 ) -> Path:
@@ -78,38 +77,16 @@ def build_report_archive(
     builds reports for key combinations the fixture cannot provide.
     """
 
-    import secrets
     import zipfile
-
-    from nacl.secret import SecretBox
-    from substrateinterface import Keypair
 
     with zipfile.ZipFile(path, "w") as archive:
         for number, (name, text) in enumerate(files.items()):
-            secret_key = secrets.token_bytes(32)
-            payload = json.dumps({"payload": text, "meta": {"orig_file_name": name}})
-            addresses = set(recipient_addresses) | {sender.get_address()}
-            package = {
-                "data": "0x"
-                + bytes(SecretBox(secret_key).encrypt(payload.encode())).hex(),
-                "keys": {
-                    address: "0x"
-                    + sender.keypair.encrypt_message(
-                        secret_key,
-                        Keypair(
-                            ss58_address=address, crypto_type=KeypairType.ED25519
-                        ).public_key,
-                    ).hex()
-                    for address in addresses
-                },
-            }
-            archive.writestr(f"member{number}.enc", json.dumps(package))
+            package = encrypt_for_recipients(
+                text, sender, recipient_addresses, {"orig_file_name": name}
+            )
+            archive.writestr(f"member{number}.enc", package)
     return path
 
 
-def ed25519_account(mnemonic: str | None = None) -> Account:
-    from substrateinterface import Keypair
-
-    return Account(
-        mnemonic or Keypair.generate_mnemonic(), crypto_type=KeypairType.ED25519
-    )
+def ed25519_account(mnemonic: str | None = None) -> Keypair:
+    return Keypair.from_mnemonic(mnemonic or generate_mnemonic())

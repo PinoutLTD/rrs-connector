@@ -5,8 +5,7 @@ import os
 import subprocess
 
 from pydantic import SecretStr
-from robonomicsinterface import Account
-from substrateinterface import KeypairType
+from robonomicsinterface import Keypair
 
 ROBONOMICS_ITEM_PREFIX = "Robonomics - "
 SEED_FIELD = "seed"
@@ -84,7 +83,7 @@ def read_pass_field(vault: str, item_title: str, field: str, reason: str) -> Sec
     return SecretStr(value)
 
 
-def load_integrator_account(address: str, vault: str) -> Account:
+def load_integrator_account(address: str, vault: str) -> Keypair:
     """Return the integrator account whose seed is stored under its address."""
 
     seed = read_pass_field(
@@ -93,8 +92,8 @@ def load_integrator_account(address: str, vault: str) -> Account:
         SEED_FIELD,
         reason="Decrypt Home Assistant reports",
     )
-    account = Account(seed.get_secret_value(), crypto_type=KeypairType.ED25519)
-    if account.get_address() != address:
+    account = Keypair.from_secret(seed.get_secret_value())
+    if account.address != address:
         raise SecretUnavailableError(
             f"Seed in Proton Pass does not derive the integrator address {address}"
         )

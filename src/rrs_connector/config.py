@@ -12,7 +12,7 @@ from pydantic import (
     model_validator,
 )
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
-from substrateinterface.utils.ss58 import is_valid_ss58_address
+from robonomicsinterface import is_valid_address
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ENV_FILE = PROJECT_ROOT / ".env"
@@ -22,9 +22,11 @@ DEFAULT_ENV_FILE = PROJECT_ROOT / ".env"
 CLIENT_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
-def validate_ss58_address(address: str) -> str:
-    if not is_valid_ss58_address(address):
-        raise ValueError(f"{address} is not a valid SS58 address")
+def validate_robonomics_address(address: str) -> str:
+    # Robonomics addresses only (SS58 format 32): a `5…` address is a site or
+    # key of another network, and would only surface when nothing decrypts.
+    if not is_valid_address(address):
+        raise ValueError(f"{address} is not a valid Robonomics address")
     return address
 
 
@@ -71,7 +73,7 @@ class EnvSettings(BaseSettings):
                 "no recipient key configured: set RRS_INTEGRATOR_ADDRESSES"
             )
         for address in addresses:
-            validate_ss58_address(address)
+            validate_robonomics_address(address)
         self.integrator_addresses = addresses
         return self
 
@@ -138,7 +140,7 @@ class SenderConfig(BaseModel):
     @field_validator("robonomics_address", mode="after")
     @classmethod
     def is_robonomics_address(cls, address: str) -> str:
-        return validate_ss58_address(address)
+        return validate_robonomics_address(address)
 
 
 class SenderRegistryConfig(BaseModel):

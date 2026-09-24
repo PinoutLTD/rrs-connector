@@ -17,7 +17,7 @@ from collections.abc import Callable
 from pathlib import Path
 from zipfile import BadZipFile, ZipFile
 
-from robonomicsinterface import Account
+from robonomicsinterface import Keypair
 
 from rrs_connector.reports.decryptor import (
     MAX_ARCHIVE_MEMBERS,
@@ -27,7 +27,7 @@ from rrs_connector.reports.decryptor import (
 
 LOGGER = logging.getLogger(__name__)
 
-KeyLoader = Callable[[str], Account]
+KeyLoader = Callable[[str], Keypair]
 
 
 class NotAddressedToUsError(ReportDecryptionError):
@@ -82,7 +82,7 @@ class RecipientKeys:
             raise ValueError("at least one recipient address is required")
         self.addresses = list(addresses)
         self._load = load
-        self._accounts: dict[str, Account] = {}
+        self._accounts: dict[str, Keypair] = {}
 
     def choose(self, archive_path: Path) -> str:
         """Our address the archive is encrypted for, in configuration order."""
@@ -97,7 +97,7 @@ class RecipientKeys:
             + "; none of them is a configured recipient key"
         )
 
-    def account(self, address: str) -> Account:
+    def account(self, address: str) -> Keypair:
         """Load a key once per run. Errors propagate: the report stays pending."""
 
         if address not in self.addresses:
