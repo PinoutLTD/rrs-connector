@@ -9,17 +9,6 @@ from rrs_connector.robonomics.retry import with_retries
 
 LOGGER = logging.getLogger(__name__)
 
-# The library checks the genesis of every node it connects to and knows only
-# Robonomics on Polkadot; Kusama is ours to name.
-ROBONOMICS_KUSAMA_GENESIS_HASH = (
-    "0x631ccc82a078481584041656af292834e1ae6daab61d2875b4dd0c14bb9b17bc"
-)
-GENESIS_HASHES = {
-    "polkadot": ROBONOMICS_GENESIS_HASH,
-    "kusama": ROBONOMICS_KUSAMA_GENESIS_HASH,
-}
-
-
 @dataclass(frozen=True)
 class DatalogRecord:
     sender_address: str

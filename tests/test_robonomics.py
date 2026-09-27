@@ -8,7 +8,6 @@ from robonomicsinterface import (
 
 from rrs_connector.pipeline import create_datalog_reader
 from rrs_connector.robonomics.datalog_reader import (
-    ROBONOMICS_KUSAMA_GENESIS_HASH,
     DatalogReader,
     DatalogRecord,
     DatalogScan,
@@ -212,20 +211,21 @@ def test_the_reader_closes_its_client() -> None:
     assert reader.client.closed is True
 
 
-@pytest.mark.parametrize(
-    ("network", "genesis"),
-    [
-        ("polkadot", ROBONOMICS_GENESIS_HASH),
-        ("kusama", ROBONOMICS_KUSAMA_GENESIS_HASH),
-    ],
-)
-def test_the_reader_checks_the_genesis_of_its_network(
-    network_config, network, genesis
-) -> None:
-    config = network_config.model_copy(update={"network": network})
-
+def test_the_reader_only_talks_to_robonomics_on_polkadot(network_config) -> None:
     # Nothing connects until the first read.
-    with create_datalog_reader(config) as reader:
-        assert reader.client.client.genesis_hash == genesis
+    with create_datalog_reader(network_config) as reader:
+        assert reader.client.client.genesis_hash == ROBONOMICS_GENESIS_HASH
         assert reader.client.client.retries == 0
         assert reader.client.client.timeout == 15
+
+
+def test_a_kusama_list_left_in_an_older_config_is_ignored(network_config) -> None:
+    data = network_config.model_dump(mode="json")
+    data["network"] = "polkadot"
+    data["wss"]["kusama"] = ["wss://kusama.rpc.robonomics.network/"]
+
+    config = type(network_config).model_validate(data)
+
+    assert [str(url) for url in config.wss.polkadot] == [
+        "wss://polkadot.rpc.robonomics.network/"
+    ]

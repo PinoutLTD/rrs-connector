@@ -52,7 +52,6 @@ def network_config() -> NetworkConfig:
             "network": "polkadot",
             "wss": {
                 "polkadot": ["wss://polkadot.rpc.robonomics.network/"],
-                "kusama": ["wss://kusama.rpc.robonomics.network/"],
             },
             "ipfs_gateways": ["https://gateway.pinata.cloud/"],
             "timeouts": {"datalog_request_seconds": 15, "ipfs_download_seconds": 60},

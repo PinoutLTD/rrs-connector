@@ -3,8 +3,6 @@ network: "polkadot"
 wss:
   polkadot:
     - "wss://polkadot.rpc.robonomics.network/"
-  kusama:
-    - "wss://kusama.rpc.robonomics.network/"
 
 # Tried in order. Reports are pinned on Pinata, so its gateway serves fresh CIDs;
 # public gateways may stall until they find the content in the IPFS network.

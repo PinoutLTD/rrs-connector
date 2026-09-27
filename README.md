@@ -127,8 +127,8 @@ The code is divided into layers with explicit responsibility boundaries:
   a CID or a heartbeat's JSON.
 - Network failures (`TransportError` from `robonomics-interface`) are retried
   with a pause, `datalog_request_max_attempts` times; an error the node answers
-  with is not. Every node the reader connects to must have the genesis of the
-  configured `network`.
+  with is not. The reader only talks to Robonomics on Polkadot: the library checks
+  each node's genesis. Kusama is legacy and no longer supported.
 
 ### Processing states
 

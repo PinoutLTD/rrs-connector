@@ -29,11 +29,7 @@ from rrs_connector.reports.manifest import (
 from rrs_connector.reports.permissions import PRIVATE, ArtifactModes, artifact_modes
 from rrs_connector.reports.recipients import RecipientKeys
 from rrs_connector.reports.retention import apply_retention
-from rrs_connector.robonomics.datalog_reader import (
-    GENESIS_HASHES,
-    DatalogReader,
-    DatalogScan,
-)
+from rrs_connector.robonomics.datalog_reader import DatalogReader, DatalogScan
 from rrs_connector.state.db import (
     create_db_engine,
     create_session_factory,
@@ -415,13 +411,12 @@ def create_download_settings(network_config: NetworkConfig) -> DownloadSettings:
 
 
 def create_datalog_reader(network_config: NetworkConfig) -> DatalogReader:
-    endpoints = getattr(network_config.wss, network_config.network)
+    endpoints = network_config.wss.polkadot
     return DatalogReader(
         wss_endpoints=[str(endpoint) for endpoint in endpoints],
         request_timeout_seconds=network_config.timeouts.datalog_request_seconds,
         max_attempts=network_config.retries.datalog_request_max_attempts,
         backoff_seconds=network_config.retries.retry_backoff_seconds,
-        genesis_hash=GENESIS_HASHES[network_config.network],
     )
 
 

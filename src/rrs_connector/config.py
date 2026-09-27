@@ -79,8 +79,9 @@ class EnvSettings(BaseSettings):
 
 
 class WssConfig(BaseModel):
+    # Robonomics on Kusama is legacy and shutting down; a `kusama:` list left in
+    # an older network.yaml is ignored.
     polkadot: list[AnyUrl]
-    kusama: list[AnyUrl]
 
 
 class TimeoutsConfig(BaseModel):
@@ -95,7 +96,7 @@ class RetriesConfig(BaseModel):
 
 
 class NetworkConfig(BaseModel):
-    network: Literal["polkadot", "kusama"]
+    network: Literal["polkadot"] = "polkadot"
     wss: WssConfig
     ipfs_gateways: list[AnyUrl]
     timeouts: TimeoutsConfig
