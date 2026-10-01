@@ -204,3 +204,25 @@ def test_an_old_database_gets_the_new_columns(env_settings):
         "last_heartbeat_payload",
         "silent_since",
     } <= columns
+
+
+def test_a_heartbeat_before_the_cursor_record_is_found(run_now, env_settings, reader):
+    # The live case on deploy: the record at the cursor is a report, the last
+    # heartbeat came before it, and signals were not tracked yet.
+    reader.publish(ADDRESS_1, 0, TIMESTAMP_1, BEAT)
+    run_now(T0 + timedelta(hours=1))
+    reader.publish(ADDRESS_1, 1, TIMESTAMP_1 + 2 * HOUR_MS, CID_1)
+    run_now(T0 + timedelta(hours=3))
+    with sqlite3.connect(env_settings.state_db) as connection:
+        connection.execute(
+            "UPDATE senders SET last_signal_at = NULL, last_heartbeat_at = NULL, "
+            "last_heartbeat_payload = NULL"
+        )
+
+    run_now(T0 + timedelta(hours=4))
+
+    sender = open_store(env_settings).get_sender_record_by_address(ADDRESS_1)
+    assert sender.last_heartbeat_payload == BEAT
+    assert sender.last_signal_at.replace(tzinfo=None) == (
+        T0 + timedelta(hours=2)
+    ).replace(tzinfo=None)
