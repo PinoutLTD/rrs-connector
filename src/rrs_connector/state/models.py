@@ -48,6 +48,20 @@ class SenderRecord(DbBase):
         DateTime(timezone=True), nullable=True
     )
 
+    # The site's last word: any record, a report or a heartbeat (watchdog.py).
+    last_signal_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # The heartbeat's JSON as the site wrote it: integration and HA versions.
+    last_heartbeat_payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Set when the site was reported silent: its last signal at that moment.
+    silent_since: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

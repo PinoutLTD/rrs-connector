@@ -19,3 +19,4 @@ build/
 .vscode/
 
 .agents/
+.DS_Store
