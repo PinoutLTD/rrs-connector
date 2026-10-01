@@ -113,14 +113,6 @@ class DatalogReader:
         records = (as_record(sender_address, item) for item in items)
         return [record for record in records if record is not None]
 
-    def list_last_records(self, sender_address: str, count: int) -> list[DatalogRecord]:
-        """The newest `count` records still held by the ring, oldest first."""
-
-        if count < 1:
-            raise ValueError("count must be at least 1")
-
-        return self.read_records(sender_address)[-count:]
-
     def list_new_records(
         self,
         sender_address: str,

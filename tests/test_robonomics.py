@@ -118,17 +118,6 @@ def test_a_heartbeat_comes_through_as_its_text() -> None:
     assert record.payload == heartbeat
 
 
-def test_list_last_records_returns_the_newest_oldest_first() -> None:
-    reader = reader_for(LINEAR)
-
-    newest = reader.list_last_records(ADDRESS_1, 2)
-
-    assert [r.payload for r in newest] == [CID_2, CID_3]
-    assert len(reader.list_last_records(ADDRESS_1, 10)) == 3
-    with pytest.raises(ValueError):
-        reader.list_last_records(ADDRESS_1, 0)
-
-
 def test_list_new_records_reads_latest_for_empty_cursor() -> None:
     scan = reader_for(LINEAR).list_new_records(ADDRESS_1, None)
 

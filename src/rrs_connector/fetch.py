@@ -59,24 +59,45 @@ class FetchResult:
 def requested_from_datalog(
     reader: DatalogReader, sender_address: str, count: int
 ) -> list[RequestedReport]:
-    """The last `count` reports a sender published, oldest first."""
+    """The last `count` reports a sender published, oldest first.
 
-    requested: list[RequestedReport] = []
-    for record in reader.list_last_records(sender_address, count):
+    Sites also write a daily heartbeat into the same datalog, so the last
+    `count` records are not the last `count` reports: walk back through all
+    the records the ring still holds (one request) until enough are found.
+    """
+
+    if count < 1:
+        raise ValueError("count must be at least 1")
+
+    reports: list[RequestedReport] = []
+    skipped = 0
+    for record in reversed(reader.read_records(sender_address)):
         cid = extract_report_cid(record.payload)
         if cid is None:
-            LOGGER.warning(
-                "Datalog #%d is not a report CID, skipping: %.80s",
-                record.datalog_index,
-                record.payload,
-            )
+            skipped += 1
             continue
-        requested.append(
+        reports.append(
             RequestedReport(
                 cid, f"datalog_{record.datalog_index}_{record.timestamp_ms}"
             )
         )
-    return requested
+        if len(reports) == count:
+            break
+
+    if skipped:
+        LOGGER.info(
+            "Skipped %d newer datalog record(s) that are not reports "
+            "(heartbeats and the like)",
+            skipped,
+        )
+    if len(reports) < count:
+        LOGGER.warning(
+            "The datalog of %s still holds %d report(s), %d asked for",
+            sender_address,
+            len(reports),
+            count,
+        )
+    return list(reversed(reports))
 
 
 def fetch_report(
