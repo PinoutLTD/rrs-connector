@@ -223,10 +223,6 @@ def watch_sender(
     sender = store.get_sender_record_by_id(sender_id)
     if sender is None:
         return None
-    if sender.last_signal_at is None:
-        # Records stored before the signal was tracked still tell it.
-        store.backfill_signal(sender_id)
-        sender = store.get_sender_record_by_id(sender_id)
 
     beat_payload = sender.last_heartbeat_payload
     signal = SiteSignal(
@@ -531,6 +527,12 @@ def run_once(
         history_from = {s.client_id: s.history_from for s in sender_registry.senders}
         for sender in sender_records:
             try:
+                if sender.last_heartbeat_at is None:
+                    # Records stored before signals were tracked still tell
+                    # them; before reading the chain, whose re-read cursor
+                    # record would otherwise be taken for the whole story.
+                    # Safe to repeat: a signal never moves back.
+                    store.backfill_signal(sender.id)
                 sender_result = collect_sender_events(
                     store, reader, sender, history_from.get(sender.client_id)
                 )
