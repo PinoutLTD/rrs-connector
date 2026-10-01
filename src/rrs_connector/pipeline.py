@@ -37,6 +37,16 @@ from rrs_connector.state.db import (
 )
 from rrs_connector.state.models import DatalogEntryRecord, DatalogStatus, SenderRecord
 from rrs_connector.state.store import StateStore
+from rrs_connector.watchdog import (
+    SITE_BACK,
+    SITE_SILENT,
+    SiteSignal,
+    as_utc,
+    back_issue,
+    parse_heartbeat,
+    silence_issue,
+    write_service_report,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -103,6 +113,8 @@ class RunOnceResult:
     reports_pending: int = 0
     reports_failed: int = 0
     reports_removed: int = 0
+    sites_silent: int = 0
+    sites_back: int = 0
     integrator_key_unavailable: bool = False
 
     @property
@@ -152,10 +164,15 @@ def collect_sender_events(
             ms_to_datetime(cursor_ms).isoformat(),
         )
 
+    last_signal = None
+    last_beat = None
     for record in scan.records:
         before_history = history_ms is not None and record.timestamp_ms < history_ms
         if cursor_ms is None and before_history:
             continue
+        last_signal = record
+        if parse_heartbeat(record.payload) is not None:
+            last_beat = record
         cid = extract_report_cid(record.payload)
         is_added = store.add_datalog_entry(
             sender_id=sender.id,
@@ -173,6 +190,14 @@ def collect_sender_events(
         else:
             result.ignored += 1
 
+    if last_signal is not None:
+        store.record_signal(
+            sender.id,
+            ms_to_datetime(last_signal.timestamp_ms),
+            ms_to_datetime(last_beat.timestamp_ms) if last_beat else None,
+            last_beat.payload if last_beat else None,
+        )
+
     # The cursor moves only after every record of this scan is stored, so a
     # failure above leaves it in place and the next run re-reads the records.
     if scan.records:
@@ -184,6 +209,55 @@ def collect_sender_events(
         )
 
     return result
+
+
+def watch_sender(
+    store: StateStore,
+    sender_id: int,
+    data_dir: Path,
+    now: datetime,
+    modes: ArtifactModes = PRIVATE,
+) -> str | None:
+    """Report a site gone silent, or back; returns the issue type written."""
+
+    sender = store.get_sender_record_by_id(sender_id)
+    if sender is None:
+        return None
+    if sender.last_signal_at is None:
+        # Records stored before the signal was tracked still tell it.
+        store.backfill_signal(sender_id)
+        sender = store.get_sender_record_by_id(sender_id)
+
+    beat_payload = sender.last_heartbeat_payload
+    signal = SiteSignal(
+        client_id=client_key(sender),
+        sender_address=sender.robonomics_address,
+        last_signal_at=as_utc(sender.last_signal_at),
+        last_heartbeat_at=as_utc(sender.last_heartbeat_at),
+        last_heartbeat=parse_heartbeat(beat_payload) if beat_payload else None,
+        silent_since=as_utc(sender.silent_since),
+    )
+    issue = back_issue(signal) or silence_issue(signal, now)
+    if issue is None:
+        return None
+
+    prepare_reports_root(data_dir, modes)
+    directory = write_service_report(
+        data_dir / REPORTS_DIR_NAME,
+        signal.client_id,
+        signal.sender_address,
+        issue,
+        now,
+        modes,
+    )
+    if issue["type"] == SITE_SILENT:
+        store.mark_silent(sender_id, signal.last_signal_at)
+        LOGGER.warning("Sender %s: %s", signal.client_id, issue["summary"])
+    else:
+        store.mark_silent(sender_id, None)
+        LOGGER.info("Sender %s: %s", signal.client_id, issue["summary"])
+    LOGGER.debug("Service report written to %s", directory)
+    return issue["type"]
 
 
 def safe_path_part(value: str) -> str:
@@ -427,8 +501,11 @@ def run_once(
     reader: DatalogSource | None = None,
     load_account: AccountLoader | None = None,
     download: ReportDownloader | None = None,
+    now: datetime | None = None,
 ) -> RunOnceResult:
     LOGGER.info("Starting run-once pass")
+    now = now or datetime.now(UTC)
+    modes = artifact_modes(env_settings.artifact_group_readable)
 
     engine = create_db_engine(env_settings.state_db)
     initialize_database(engine)
@@ -466,6 +543,18 @@ def run_once(
                 result.failed += 1
                 continue
 
+            # Only a site whose datalog was read in this run can be called
+            # silent: a node that cannot be reached says nothing about it.
+            try:
+                watched = watch_sender(
+                    store, sender.id, env_settings.data_dir, now, modes
+                )
+            except Exception:
+                LOGGER.exception("Watching sender %s failed", sender.client_id)
+                watched = None
+            result.sites_silent += int(watched == SITE_SILENT)
+            result.sites_back += int(watched == SITE_BACK)
+
             result.processed += 1
             result.new_events += sender_result.new
             result.ignored_events += sender_result.ignored
@@ -492,7 +581,7 @@ def run_once(
         load_account
         or (lambda address: load_integrator_account(address, env_settings.pass_vault)),
         download or download_report,
-        artifact_modes(env_settings.artifact_group_readable),
+        modes,
     )
     result.reports_processed = report_result.processed
     result.reports_pending = report_result.pending
@@ -514,7 +603,7 @@ def run_once(
     LOGGER.info(
         "Run once is completed: senders processed=%d/%d failed=%d skipped=%d; "
         "events new=%d ignored=%d already_known=%d; senders with gaps=%d; "
-        "reports processed=%d pending=%d failed=%d%s",
+        "reports processed=%d pending=%d failed=%d; sites silent=%d back=%d%s",
         result.processed,
         result.enabled,
         result.failed,
@@ -526,6 +615,8 @@ def run_once(
         result.reports_processed,
         result.reports_pending,
         result.reports_failed,
+        result.sites_silent,
+        result.sites_back,
         "; integrator key unavailable" if result.integrator_key_unavailable else "",
     )
     return result

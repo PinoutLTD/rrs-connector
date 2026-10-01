@@ -248,6 +248,49 @@ without one is still being worked on, failed, or was interrupted.
 - Files do not stay forever (see "Retention"), so a reader should attach what
   is there and not assume every listed file still exists.
 
+#### Service reports: a site gone silent, and back
+
+Reports are sent only when something is wrong, so silence alone is ambiguous.
+Since 1.1.0-beta.4 the integration also writes a daily heartbeat into its
+datalog, `{"t": "hb", "v": "<version>", "ha": "<HA version>", "ts": …}`. The
+connector keeps every site's last signal (any record) and last heartbeat
+(`src/rrs_connector/watchdog.py`):
+
+- A site that has sent at least one heartbeat and then gives no signal for
+  72 hours gets a `site_silent` report, once.
+- When it speaks again, it gets a `site_back` report.
+- A site whose datalog could not be read in a run is not judged in that run:
+  an unreachable node says nothing about the site.
+- Sites without a heartbeat (an older integration) are never reported.
+
+These reports come from the connector itself, so there is no datalog record,
+CID or archive behind them. They are written in `reports/<client_id>/service_<type>_<UTC time>/`
+under the same contract, with `"source": "connector"`:
+
+```json
+{
+  "contract_version": 1,
+  "report_id": "oscar-home/service_site_silent_20261004T150100Z",
+  "client_id": "oscar-home",
+  "sender_address": "4FkS…",
+  "source": "connector",
+  "datalog_index": null,
+  "datalog_timestamp": null,
+  "cid": null,
+  "processed_at": "2026-10-04T15:01:00+00:00",
+  "archive": null,
+  "decrypted_dir": null,
+  "issue_file": "issue_description.json",
+  "files": []
+}
+```
+
+The issue has the usual fields. `type` is `site_silent` or `site_back`, and
+`details` holds the last signal, how long the site was silent, and the
+integration and HA versions from its last heartbeat. A manifest without
+`source` is a report of the site. A reader must accept `null` in the datalog
+fields and `cid` when `source` is `connector`.
+
 ### Recipient keys
 
 - Only public addresses are configured (`RRS_INTEGRATOR_ADDRESSES`). Each seed

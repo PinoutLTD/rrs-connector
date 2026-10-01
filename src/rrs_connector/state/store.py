@@ -12,6 +12,7 @@ from rrs_connector.state.models import (
     ReportArtifactRecord,
     SenderRecord,
 )
+from rrs_connector.watchdog import as_utc, parse_heartbeat
 
 
 class StateStore:
@@ -112,6 +113,58 @@ class StateStore:
             sender_record.last_scanned_datalog_index = datalog_index
             sender_record.last_scanned_at = datetime.now(UTC)
 
+            session.commit()
+
+    def record_signal(
+        self,
+        sender_id: int,
+        signal_at: datetime,
+        heartbeat_at: datetime | None = None,
+        heartbeat_payload: str | None = None,
+    ) -> None:
+        """Move the site's last signal (and last heartbeat) forward, never back."""
+
+        with self._session_factory() as session:
+            sender = session.get(SenderRecord, sender_id)
+            if sender is None:
+                raise ValueError(f"Sender not found: {sender_id}")
+            last = as_utc(sender.last_signal_at)
+            if last is None or last < signal_at:
+                sender.last_signal_at = signal_at
+            if heartbeat_at is not None and (
+                sender.last_heartbeat_at is None
+                or as_utc(sender.last_heartbeat_at) < heartbeat_at
+            ):
+                sender.last_heartbeat_at = heartbeat_at
+                sender.last_heartbeat_payload = heartbeat_payload
+            session.commit()
+
+    def backfill_signal(self, sender_id: int) -> None:
+        """Fill the last signal from records stored before it was tracked."""
+
+        with self._session_factory() as session:
+            entries = session.scalars(
+                select(DatalogEntryRecord)
+                .where(DatalogEntryRecord.sender_id == sender_id)
+                .order_by(DatalogEntryRecord.datalog_timestamp)
+            ).all()
+        for entry in entries:
+            beat = parse_heartbeat(entry.raw_payload or "")
+            self.record_signal(
+                sender_id,
+                as_utc(entry.datalog_timestamp),
+                as_utc(entry.datalog_timestamp) if beat else None,
+                entry.raw_payload if beat else None,
+            )
+
+    def mark_silent(self, sender_id: int, since: datetime | None) -> None:
+        """Remember a site was reported silent (since when), or clear it."""
+
+        with self._session_factory() as session:
+            sender = session.get(SenderRecord, sender_id)
+            if sender is None:
+                raise ValueError(f"Sender not found: {sender_id}")
+            sender.silent_since = since
             session.commit()
 
     def add_datalog_entry(
