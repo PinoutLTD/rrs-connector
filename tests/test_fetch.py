@@ -14,13 +14,15 @@ TIMESTAMP_2 = 1780072623000
 
 
 class FakeLastRecords:
+    """The ring as the reader returns it: every live record, oldest first."""
+
     def __init__(self, records: list[DatalogRecord]) -> None:
         self.records = records
-        self.requested: list[int] = []
+        self.reads = 0
 
-    def list_last_records(self, sender_address: str, count: int):
-        self.requested.append(count)
-        return self.records[-count:]
+    def read_records(self, sender_address: str):
+        self.reads += 1
+        return list(self.records)
 
 
 @pytest.fixture
@@ -71,7 +73,7 @@ def test_last_reports_come_from_the_datalog(run_fetch, sender_address) -> None:
 
     result = run_fetch(sender_address, last=2, reader=reader)
 
-    assert reader.requested == [2]
+    assert reader.reads == 1
     assert [path.name for path in result.fetched] == [
         f"datalog_96_{TIMESTAMP_1}",
         f"datalog_97_{TIMESTAMP_2}",
@@ -89,6 +91,47 @@ def test_payload_that_is_not_a_cid_is_skipped(run_fetch, sender_address) -> None
     result = run_fetch(sender_address, last=2, reader=reader)
 
     assert [path.name for path in result.fetched] == [f"datalog_97_{TIMESTAMP_2}"]
+
+
+HEARTBEAT = '{"t":"hb","v":"1.1.0-beta.8","ha":"2026.9.3","ts":1780079823}'
+
+
+def test_heartbeats_do_not_take_the_place_of_reports(run_fetch, sender_address) -> None:
+    # A site writes a heartbeat every day: the newest records are often not
+    # reports, and --last N still means N reports.
+    reader = FakeLastRecords(
+        [
+            DatalogRecord(sender_address, 95, TIMESTAMP_1 - 1000, CID_2),
+            DatalogRecord(sender_address, 96, TIMESTAMP_1, CID_1),
+            DatalogRecord(sender_address, 97, TIMESTAMP_2, HEARTBEAT),
+            DatalogRecord(sender_address, 98, TIMESTAMP_2 + 1000, HEARTBEAT),
+        ]
+    )
+
+    last_one = run_fetch(sender_address, last=1, reader=reader)
+    last_two = run_fetch(sender_address, last=2, reader=reader)
+
+    assert [path.name for path in last_one.fetched] == [f"datalog_96_{TIMESTAMP_1}"]
+    assert [path.name for path in last_two.fetched] == [
+        f"datalog_95_{TIMESTAMP_1 - 1000}",
+        f"datalog_96_{TIMESTAMP_1}",
+    ]
+
+
+def test_fewer_reports_than_asked_for_are_still_fetched(
+    run_fetch, sender_address, caplog
+) -> None:
+    reader = FakeLastRecords(
+        [
+            DatalogRecord(sender_address, 96, TIMESTAMP_1, CID_1),
+            DatalogRecord(sender_address, 97, TIMESTAMP_2, HEARTBEAT),
+        ]
+    )
+
+    result = run_fetch(sender_address, last=3, reader=reader)
+
+    assert [path.name for path in result.fetched] == [f"datalog_96_{TIMESTAMP_1}"]
+    assert "still holds 1 report(s), 3 asked for" in caplog.text
 
 
 def test_nothing_to_fetch_is_reported(run_fetch, sender_address) -> None:

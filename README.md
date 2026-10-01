@@ -480,7 +480,8 @@ uv run rrs-connector --command fetch --sender 4Efp… --last 2
 ```
 
 `--cid` may be repeated; `--last N` takes the newest N reports the sender's
-ring buffer still holds. Without `--output` the reports land in
+ring buffer still holds, passing over heartbeats and other records that are
+not reports. Without `--output` the reports land in
 `<RRS_DATA_DIR>/fetched/<sender>/`. Files are owner-only, and they are
 plaintext logs from a client's home: delete them once the question is
 answered.
