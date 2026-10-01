@@ -12,9 +12,13 @@ WorkingDirectory=/mnt/disk/pinout-report-service/rrs-connector
 Environment=PROTON_PASS_SESSION_DIR=/var/lib/rrs-connector/pass-session
 # The token file stays root-only; systemd hands a copy to this unit alone.
 LoadCredential=token:/etc/rrs/connector.token
+# The Healthchecks.io ping URL of this service (deploy/healthcheck.sh).
+LoadCredential=healthcheck:/etc/rrs/connector.healthcheck
 ExecStart=/mnt/disk/pinout-report-service/rrs-connector/deploy/session.sh \
     /mnt/disk/pinout-report-service/rrs-connector/.venv/bin/rrs-connector \
     --command run-once
+# After every run, success or not: report the outcome to Healthchecks.io.
+ExecStopPost=/mnt/disk/pinout-report-service/rrs-connector/deploy/healthcheck.sh
 
 NoNewPrivileges=true
 PrivateTmp=true
