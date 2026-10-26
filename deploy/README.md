@@ -41,6 +41,14 @@ pass-cli item view --vault-name "Report Service" --item-title "rrs-connector (He
   | ssh <host> 'umask 037 && cat > /etc/rrs/connector.healthcheck && chgrp rrs-connector /etc/rrs/connector.healthcheck && chmod 640 /etc/rrs/connector.healthcheck'
 ```
 
+`/etc/rrs` itself is root-only (`0700`), so the service user cannot even reach the file in it. Let it pass through the directory, and only that, with an ACL on the directory (no listing, and the token files stay root-only):
+
+```bash
+setfacl -m u:rrs-connector:x /etc/rrs
+```
+
+Without this the script finds no readable file and says so in the journal.
+
 The script reads that file itself (the unit passes its path), and it is not handed over with `LoadCredential=` like the token: on systemd 249 (Ubuntu 22.04) the credentials directory cannot be read in `ExecStopPost=`, and the script used to exit there without a word, so for the first weeks no ping was ever sent.
 
 Every run leaves one line in the journal from `healthcheck.sh`: `reported result=…`, or why nothing was sent (no readable file, an empty file, Healthchecks.io unreachable). A missing file or an unreachable Healthchecks.io does not fail a run, but it shows there. After setting this up, check `journalctl -u rrs-connector -n 20` for `healthcheck: reported result=success`, and the check's "last ping" in Healthchecks.io.
