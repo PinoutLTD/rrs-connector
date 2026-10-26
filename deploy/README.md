@@ -15,8 +15,8 @@ Expected around it:
 
 - users `rrs-connector` and `rrs-bridge`, both in the shared group `rrs-reports`;
 - `/mnt/disk/pinout-report-service/data/connector` owned by `rrs-connector:rrs-reports`;
-- `/etc/rrs/connector.healthcheck` root-only, holding the Healthchecks.io ping URL
-  of this service (see below);
+- `/etc/rrs/connector.healthcheck` owned `root:rrs-connector`, mode `0640`, holding the
+  Healthchecks.io ping URL of this service (see below);
 - `/etc/rrs/connector.token` root-only, holding the agent token;
 - `/var/lib/rrs-connector/pass-session` owned by the service user;
 - `pass-cli` in `/usr/local/bin`, and a `.venv` built from `uv sync` (uv is not
@@ -34,11 +34,13 @@ After every run, `deploy/healthcheck.sh` (the unit's `ExecStopPost=`) reports ho
 
 The check is set to a 1 h period with 1 h grace. So the team gets an alert when no run has succeeded for two hours: two failures in a row, or the server down. A single passing failure wakes nobody.
 
-The ping URL is a credential: whoever knows it can report "all is well". It lives in Proton Pass (vault "Report Service", item "rrs-connector (Healthchecks)", field Password) and on the host in a root-only file, handed to the unit by `LoadCredential=`. Copy it from Proton Pass to the host without printing it:
+The ping URL is a secret: whoever knows it can report "all is well". It lives in Proton Pass (vault "Report Service", item "rrs-connector (Healthchecks)", field Password) and on the host in a file readable by the service's group only. Copy it from Proton Pass to the host without printing it:
 
 ```bash
 pass-cli item view --vault-name "Report Service" --item-title "rrs-connector (Healthchecks)" --field password \
-  | ssh <host> 'umask 077 && cat > /etc/rrs/connector.healthcheck'
+  | ssh <host> 'umask 037 && cat > /etc/rrs/connector.healthcheck && chgrp rrs-connector /etc/rrs/connector.healthcheck && chmod 640 /etc/rrs/connector.healthcheck'
 ```
 
-The unit does not start without the file. Neither a missing URL inside it nor an unreachable Healthchecks.io fails a run.
+The script reads that file itself (the unit passes its path), and it is not handed over with `LoadCredential=` like the token: on systemd 249 (Ubuntu 22.04) the credentials directory cannot be read in `ExecStopPost=`, and the script used to exit there without a word, so for the first weeks no ping was ever sent.
+
+Every run leaves one line in the journal from `healthcheck.sh`: `reported result=…`, or why nothing was sent (no readable file, an empty file, Healthchecks.io unreachable). A missing file or an unreachable Healthchecks.io does not fail a run, but it shows there. After setting this up, check `journalctl -u rrs-connector -n 20` for `healthcheck: reported result=success`, and the check's "last ping" in Healthchecks.io.
